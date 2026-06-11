@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+#
+# ocp - OpenShift installer/client version manager
+#
+# Downloads versioned openshift-install / oc / kubectl binaries from the
+# public OpenShift mirror into ~/.local/bin, letting multiple OCP versions
+# coexist. A 'use' command swaps the bare-named symlinks between versions.
+#
+# Subcommands:
+#   ocp get <version|channel>   Download + verify + install a version
+#   ocp use <version>           Point openshift-install/oc/kubectl at a version
+#   ocp list                    List installed versions (* = active)
+#   ocp list-remote [X.Y]       List versions available on the mirror
+#   ocp remove <version>        Remove an installed version's binaries
+#
+set -euo pipefail
+
+# ---- configuration ---------------------------------------------------------
+
+BASE_URL="https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp"
+BIN_DIR="${OCP_BIN_DIR:-$HOME/.local/bin}"
+
+# Tarball names are version-qualified (e.g. openshift-install-linux-4.14.1.tar.gz).
+# These versioned names are listed in sha256sum.txt for both exact-version and
+# channel directories, whereas the generic names are not present in exact dirs.
+
+# ---- helpers ---------------------------------------------------------------
+
+err()  { printf 'error: %s\n' "$*" >&2; }
+die()  { err "$*"; exit 1; }
+info() { printf '%s\n' "$*" >&2; }
+
+require() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+# Mirror platform token for this host (linux, linux-arm64, mac, mac-arm64).
+# Override with OCP_PLATFORM, e.g. OCP_PLATFORM=mac-arm64.
+detect_platform() {
+  [ -n "${OCP_PLATFORM:-}" ] && { printf '%s\n' "$OCP_PLATFORM"; return; }
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Linux)  os="linux" ;;
+    Darwin) os="mac" ;;
+    *) die "unsupported OS '$os' (set OCP_PLATFORM to override)" ;;
+  esac
+  case "$arch" in
+    x86_64|amd64)  arch="" ;;        # x86_64 token is just "linux"/"mac"
+    arm64|aarch64) arch="-arm64" ;;
+    *) die "unsupported architecture '$arch' (set OCP_PLATFORM to override)" ;;
+  esac
+  printf '%s%s\n' "$os" "$arch"
+}
+
+# Portable SHA-256: GNU sha256sum or BSD/macOS 'shasum -a 256'. Echoes the hash.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    die "need 'sha256sum' or 'shasum' to verify downloads"
+  fi
+}
+
+# Portable version sort: GNU 'sort -V' if available, else plain sort.
+vsort() {
+  if printf '1\n2\n' | sort -V >/dev/null 2>&1; then sort -V; else sort; fi
+}
+
+# Single workdir, cleaned up once on exit (avoids per-function RETURN traps).
+WORKDIR=""
+cleanup() { [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"; }
+trap cleanup EXIT
+
+check_path() {
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) info "warning: $BIN_DIR is not on your \$PATH; add it to use these binaries" ;;
+  esac
+}
+
+usage() {
+  cat <<EOF
+ocp - OpenShift installer/client version manager
+
+Usage:
+  ocp get <version|channel>   Download, verify and install a version
+  ocp use <version>           Activate a version (swap symlinks)
+  ocp list                    List installed versions (* = active)
+  ocp list-remote [X.Y]       List versions available on the mirror
+  ocp remove <version>        Remove an installed version
+
+Examples:
+  ocp get 4.14.1
+  ocp get stable-4.15
+  ocp use 4.14.1
+  ocp list-remote 4.14
+
+Binaries are installed to: $BIN_DIR
+
+Environment:
+  OCP_BIN_DIR    install directory (default ~/.local/bin)
+  OCP_PLATFORM   force platform: linux | linux-arm64 | mac | mac-arm64
+                 (default: auto-detected from uname)
+  OCP_INSECURE   set to 1 to continue past a checksum mismatch
+EOF
+}
+
+# Resolve a version-or-channel argument to a concrete version string by
+# reading <arg>/release.txt from the mirror. Echoes the concrete version.
+resolve_version() {
+  local ref="$1" release name
+  release="$(curl -fsSL "$BASE_URL/$ref/release.txt" 2>/dev/null)" \
+    || die "could not find '$ref' on the mirror ($BASE_URL/$ref/)"
+  name="$(printf '%s\n' "$release" | sed -n 's/^Name:[[:space:]]*//p' | head -n1)"
+  [ -n "$name" ] || die "could not parse a version from $ref/release.txt"
+  printf '%s\n' "$name"
+}
+
+# Verify a file against a line in sha256sum.txt. Args: <sumfile> <tarball-name> <file>
+# A missing checksum line is fatal (wrong filename). A hash mismatch returns 1
+# so the caller can decide (the mirror's Apple-Silicon checksums are unreliable).
+verify_checksum() {
+  local sumfile="$1" tarball="$2" file="$3" expected actual
+  expected="$(grep -E "[[:space:]]${tarball}\$" "$sumfile" | awk '{print $1}' | head -n1)"
+  [ -n "$expected" ] || die "no checksum for $tarball in sha256sum.txt"
+  actual="$(sha256_of "$file")"
+  if [ "$expected" != "$actual" ]; then
+    info "checksum mismatch for $tarball (expected $expected, got $actual)"
+    return 1
+  fi
+}
+
+# ---- subcommands -----------------------------------------------------------
+
+cmd_get() {
+  local ref="${1:-}"
+  [ -n "$ref" ] || die "usage: ocp get <version|channel>"
+  require curl; require tar
+
+  local platform version
+  platform="$(detect_platform)"
+  version="$(resolve_version "$ref")"
+  info "Resolved '$ref' -> $version ($platform)"
+
+  if [ -x "$BIN_DIR/openshift-install-$version" ] \
+     && [ -x "$BIN_DIR/oc-$version" ]; then
+    info "$version already installed"
+    check_path
+    return 0
+  fi
+
+  local install_tarball="openshift-install-$platform-$version.tar.gz"
+  local client_tarball="openshift-client-$platform-$version.tar.gz"
+
+  local tmp
+  WORKDIR="$(mktemp -d)"
+  tmp="$WORKDIR"
+
+  info "Downloading sha256sum.txt ..."
+  curl -fsSL "$BASE_URL/$ref/sha256sum.txt" -o "$tmp/sha256sum.txt" \
+    || die "failed to download sha256sum.txt"
+
+  info "Downloading $install_tarball ..."
+  curl -fSL --progress-bar "$BASE_URL/$ref/$install_tarball" -o "$tmp/$install_tarball" \
+    || die "failed to download $install_tarball"
+  info "Downloading $client_tarball ..."
+  curl -fSL --progress-bar "$BASE_URL/$ref/$client_tarball" -o "$tmp/$client_tarball" \
+    || die "failed to download $client_tarball"
+
+  info "Verifying checksums ..."
+  local t
+  for t in "$install_tarball" "$client_tarball"; do
+    if ! verify_checksum "$tmp/sha256sum.txt" "$t" "$tmp/$t"; then
+      if [ "$platform" = "mac-arm64" ]; then
+        info "  note: Apple Silicon binaries are re-signed/notarized after the mirror"
+        info "  publishes sha256sum.txt, so this mismatch is expected upstream; continuing."
+      elif [ "${OCP_INSECURE:-}" = "1" ]; then
+        info "  OCP_INSECURE=1 set; continuing despite mismatch."
+      else
+        die "checksum verification failed for $t (set OCP_INSECURE=1 to override)"
+      fi
+    fi
+  done
+
+  info "Extracting ..."
+  tar -xzf "$tmp/$install_tarball" -C "$tmp" openshift-install
+  tar -xzf "$tmp/$client_tarball"  -C "$tmp" oc kubectl
+
+  mkdir -p "$BIN_DIR"
+  install -m 0755 "$tmp/openshift-install" "$BIN_DIR/openshift-install-$version"
+  install -m 0755 "$tmp/oc"                "$BIN_DIR/oc-$version"
+  install -m 0755 "$tmp/kubectl"           "$BIN_DIR/kubectl-$version"
+
+  info "Installed:"
+  info "  $BIN_DIR/openshift-install-$version"
+  info "  $BIN_DIR/oc-$version"
+  info "  $BIN_DIR/kubectl-$version"
+  info "Run 'ocp use $version' to activate it."
+  check_path
+}
+
+# Echo the active version (the target of the openshift-install symlink), or nothing.
+active_version() {
+  local link="$BIN_DIR/openshift-install" target
+  [ -L "$link" ] || return 0
+  target="$(readlink "$link")"
+  printf '%s\n' "${target##*openshift-install-}"
+}
+
+cmd_use() {
+  local version="${1:-}"
+  [ -n "$version" ] || die "usage: ocp use <version>"
+
+  for bare in openshift-install oc kubectl; do
+    [ -x "$BIN_DIR/$bare-$version" ] \
+      || die "$bare-$version not installed; run 'ocp get $version' first"
+  done
+
+  for bare in openshift-install oc kubectl; do
+    rm -f "$BIN_DIR/$bare"   # portable replace (BSD ln lacks -n)
+    ln -s "$BIN_DIR/$bare-$version" "$BIN_DIR/$bare"
+  done
+  info "Now using OCP $version (openshift-install, oc, kubectl)"
+  check_path
+}
+
+cmd_list() {
+  local active f version found=0
+  active="$(active_version)"
+  shopt -s nullglob
+  for f in "$BIN_DIR"/openshift-install-*; do
+    [ -L "$f" ] && continue   # skip the bare symlink if it matched
+    version="${f##*/openshift-install-}"
+    found=1
+    if [ "$version" = "$active" ]; then
+      printf '* %s\n' "$version"
+    else
+      printf '  %s\n' "$version"
+    fi
+  done
+  shopt -u nullglob
+  [ "$found" = 1 ] || info "no versions installed; try 'ocp get <version>'"
+}
+
+cmd_list_remote() {
+  require curl
+  local filter="${1:-}" url="$BASE_URL/"
+  curl -fsSL "$url" \
+    | grep -oE 'href="[^"]+/"' \
+    | sed -E 's/href="([^"]+)\/"/\1/' \
+    | grep -vE '^\.' \
+    | { if [ -n "$filter" ]; then grep -E "^${filter//./\\.}\." ; else cat; fi; } \
+    | vsort \
+    | uniq
+}
+
+cmd_remove() {
+  local version="${1:-}"
+  [ -n "$version" ] || die "usage: ocp remove <version>"
+  local active removed=0
+  active="$(active_version)"
+
+  if [ "$version" = "$active" ]; then
+    info "warning: $version is the active version; symlinks will dangle until you 'ocp use' another"
+  fi
+
+  for bare in openshift-install oc kubectl; do
+    if [ -e "$BIN_DIR/$bare-$version" ]; then
+      rm -f "$BIN_DIR/$bare-$version"
+      removed=1
+    fi
+  done
+  [ "$removed" = 1 ] || die "$version is not installed"
+  info "Removed OCP $version"
+}
+
+# ---- dispatch --------------------------------------------------------------
+
+main() {
+  local sub="${1:-}"
+  [ "$#" -gt 0 ] && shift || true
+  case "$sub" in
+    get)         cmd_get "$@" ;;
+    use)         cmd_use "$@" ;;
+    list)        cmd_list "$@" ;;
+    list-remote) cmd_list_remote "$@" ;;
+    remove|rm)   cmd_remove "$@" ;;
+    ""|-h|--help|help) usage ;;
+    *) err "unknown command: $sub"; usage; exit 1 ;;
+  esac
+}
+
+main "$@"
