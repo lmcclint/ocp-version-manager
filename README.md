@@ -30,7 +30,14 @@ ocp use <version>           # activate a version (swap openshift-install/oc/kube
 ocp list                    # list installed versions (* = active, with components)
 ocp list-remote [X.Y]       # list versions available on the mirror
 ocp remove <version>        # remove an installed version's binaries
+ocp update                  # update ocp itself to the latest version
+ocp --version               # print the ocp version
 ```
+
+`ocp update` replaces the running script in place with the latest copy from
+the project's `main` branch (set `OCP_UPDATE_URL` to point elsewhere, e.g. a
+fork). It downloads to a temp file, syntax-checks it, and only swaps it in if
+the version differs — so a bad download can't brick the tool.
 
 By default `get` downloads all three binaries. `--cli-only` and
 `--installer-only` (mutually exclusive) fetch just one component, and a `get`
@@ -77,6 +84,7 @@ Force it with `OCP_PLATFORM` (e.g. `OCP_PLATFORM=mac-arm64`).
 | `OCP_BIN_DIR` | Install directory (default `~/.local/bin`) |
 | `OCP_PLATFORM` | Override the detected platform |
 | `OCP_INSECURE` | Set to `1` to continue past a checksum mismatch |
+| `OCP_UPDATE_URL` | Source URL for `ocp update` (default: GitHub raw, `main`) |
 
 ## Checksums & Apple Silicon
 
