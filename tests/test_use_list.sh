@@ -26,6 +26,7 @@ out="$("$OCP" list 2>&1)"
 assert_contains "4.14.1  (installer, oc, kubectl)" "$out" "full install annotated"
 assert_contains "4.15.0  (oc, kubectl)"            "$out" "cli-only annotated"
 assert_contains "4.16.0  (installer)"              "$out" "installer-only annotated"
+assert_re '^Total: [0-9]' "$out" "list shows a human-readable total size"
 
 echo "=== use cli-only version: installer symlink unset + warned ==="
 out="$("$OCP" use 4.15.0 2>&1)"
