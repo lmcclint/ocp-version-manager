@@ -99,6 +99,14 @@ The platform is auto-detected from `uname` (OS + arch):
 
 Force it with `OCP_PLATFORM` (e.g. `OCP_PLATFORM=mac-arm64`).
 
+All four of these are served from a single mirror directory. Despite the
+`x86_64` in the default URL, that path is the mirror's *cross-platform* client
+tree — the `linux-arm64`, `mac`, and `mac-arm64` tarballs all live there too
+(the arm64 binaries are not in the sibling `arm64/` tree). Linux `ppc64le` and
+`s390x` are **not** supported: the client tarballs exist there but the matching
+`openshift-install` does not, and those arches are rejected unless you set
+`OCP_PLATFORM`/`OCP_BASE_URL` yourself.
+
 ## Environment variables
 
 | Variable | Purpose |
@@ -106,6 +114,7 @@ Force it with `OCP_PLATFORM` (e.g. `OCP_PLATFORM=mac-arm64`).
 | `OCP_BIN_DIR` | Install directory (default `~/.local/bin`) |
 | `OCP_PLATFORM` | Override the detected platform |
 | `OCP_INSECURE` | Set to `1` to continue past a checksum mismatch |
+| `OCP_BASE_URL` | Mirror clients directory (default: the cross-platform `x86_64` tree) |
 | `OCP_UPDATE_URL` | Source URL for `ocp update` (default: GitHub raw, `main`) |
 
 ## Checksums & Apple Silicon
