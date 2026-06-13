@@ -110,3 +110,14 @@ verify cleanly.)
 ## Requirements
 
 `curl`, `tar`, and either `sha256sum` (Linux) or `shasum` (macOS).
+
+## Tests
+
+A small offline test suite lives in `tests/` — it stubs the network (a fake
+`curl`, `file://` update sources) and a temporary `OCP_BIN_DIR`, so it needs no
+mirror access:
+
+```sh
+tests/run.sh                 # test the ocp in this repo
+OCP=/path/to/ocp tests/run.sh
+```
