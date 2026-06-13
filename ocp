@@ -18,9 +18,15 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.3.0"
+VERSION="0.3.1"
 
-BASE_URL="https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp"
+# Despite the "x86_64" in the path, this is the mirror's cross-platform client
+# directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
+# tarballs (the arm64 binaries are served from here, not the sibling arm64/
+# tree), so detect_platform's tokens all resolve against this one URL. The
+# ppc64le/s390x clients live here too but their installers do not, so those
+# arches aren't fully supported. Override OCP_BASE_URL to point at another tree.
+BASE_URL="${OCP_BASE_URL:-https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp}"
 BIN_DIR="${OCP_BIN_DIR:-$HOME/.local/bin}"
 
 # Where 'ocp update' pulls a fresh copy of this script from. Override for forks.
@@ -125,6 +131,8 @@ Environment:
   OCP_PLATFORM   force platform: linux | linux-arm64 | mac | mac-arm64
                  (default: auto-detected from uname)
   OCP_INSECURE   set to 1 to continue past a checksum mismatch
+  OCP_BASE_URL   mirror clients dir (default: the cross-platform x86_64 tree,
+                 which also serves the arm64 + mac binaries)
   OCP_UPDATE_URL source URL for 'ocp update' (default: GitHub raw, main)
 EOF
 }
