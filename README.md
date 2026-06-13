@@ -25,6 +25,7 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc
 ocp get <version|channel>   # download, verify (sha256) and install a version
 ocp get --cli-only <ver>    # only the client (oc + kubectl)
 ocp get --installer-only <ver>  # only openshift-install
+ocp get --use <ver>         # install, then activate it (runs 'use')
 ocp use <version>           # activate a version (swap openshift-install/oc/kubectl)
 ocp list                    # list installed versions (* = active, with components)
 ocp list-remote [X.Y]       # list versions available on the mirror
@@ -34,7 +35,9 @@ ocp remove <version>        # remove an installed version's binaries
 By default `get` downloads all three binaries. `--cli-only` and
 `--installer-only` (mutually exclusive) fetch just one component, and a `get`
 only downloads what's missing — so running `ocp get 4.14.1` after an earlier
-`ocp get --cli-only 4.14.1` just adds the installer. When a version has only
+`ocp get --cli-only 4.14.1` just adds the installer. Add `--use` to activate
+the version right after installing (it also activates if everything was
+already present). When a version has only
 some components installed, `ocp use` links the ones present and unsets the bare
 symlink for any that are missing (warning as it does so), and `ocp list`
 annotates each version with the components it has.
