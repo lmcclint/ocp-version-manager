@@ -87,7 +87,10 @@ usage() {
 ocp - OpenShift installer/client version manager
 
 Usage:
-  ocp get <version|channel>   Download, verify and install a version
+  ocp get [--cli-only|--installer-only] <version|channel>
+                              Download, verify and install a version.
+                              --cli-only       only oc + kubectl
+                              --installer-only only openshift-install
   ocp use <version>           Activate a version (swap symlinks)
   ocp list                    List installed versions (* = active)
   ocp list-remote [X.Y]       List versions available on the mirror
@@ -96,6 +99,8 @@ Usage:
 Examples:
   ocp get 4.14.1
   ocp get stable-4.15
+  ocp get --cli-only 4.14.1
+  ocp get --installer-only stable-4.15
   ocp use 4.14.1
   ocp list-remote 4.14
 
@@ -137,8 +142,20 @@ verify_checksum() {
 # ---- subcommands -----------------------------------------------------------
 
 cmd_get() {
-  local ref="${1:-}"
-  [ -n "$ref" ] || die "usage: ocp get <version|channel>"
+  # "cli" = the client tarball (oc + kubectl); "installer" = openshift-install.
+  local ref="" want_cli=1 want_installer=1
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --cli-only)       want_installer=0 ;;
+      --installer-only) want_cli=0 ;;
+      -*) die "unknown flag: $1 (see 'ocp --help')" ;;
+      *)  [ -z "$ref" ] || die "unexpected argument: $1"; ref="$1" ;;
+    esac
+    shift
+  done
+  [ -n "$ref" ] || die "usage: ocp get [--cli-only|--installer-only] <version|channel>"
+  [ "$want_cli" = 1 ] || [ "$want_installer" = 1 ] \
+    || die "--cli-only and --installer-only are mutually exclusive"
   require curl; require tar
 
   local platform version
@@ -146,15 +163,25 @@ cmd_get() {
   version="$(resolve_version "$ref")"
   info "Resolved '$ref' -> $version ($platform)"
 
-  if [ -x "$BIN_DIR/openshift-install-$version" ] \
-     && [ -x "$BIN_DIR/oc-$version" ]; then
-    info "$version already installed"
+  # Only fetch components that are both requested and not already installed,
+  # so a repeated 'get' (or one that completes a partial install) skips work.
+  local need_installer=0 need_client=0
+  [ "$want_installer" = 1 ] && [ ! -x "$BIN_DIR/openshift-install-$version" ] && need_installer=1
+  [ "$want_cli" = 1 ]       && [ ! -x "$BIN_DIR/oc-$version" ]                && need_client=1
+
+  if [ "$need_installer" = 0 ] && [ "$need_client" = 0 ]; then
+    info "$version already installed (requested components present)"
     check_path
     return 0
   fi
 
   local install_tarball="openshift-install-$platform-$version.tar.gz"
   local client_tarball="openshift-client-$platform-$version.tar.gz"
+
+  # Tarballs to fetch this run (never empty: we returned early if nothing needed).
+  local tarballs=()
+  [ "$need_installer" = 1 ] && tarballs+=("$install_tarball")
+  [ "$need_client" = 1 ]    && tarballs+=("$client_tarball")
 
   local tmp
   WORKDIR="$(mktemp -d)"
@@ -164,16 +191,15 @@ cmd_get() {
   curl -fsSL "$BASE_URL/$ref/sha256sum.txt" -o "$tmp/sha256sum.txt" \
     || die "failed to download sha256sum.txt"
 
-  info "Downloading $install_tarball ..."
-  curl -fSL --progress-bar "$BASE_URL/$ref/$install_tarball" -o "$tmp/$install_tarball" \
-    || die "failed to download $install_tarball"
-  info "Downloading $client_tarball ..."
-  curl -fSL --progress-bar "$BASE_URL/$ref/$client_tarball" -o "$tmp/$client_tarball" \
-    || die "failed to download $client_tarball"
+  local t
+  for t in "${tarballs[@]}"; do
+    info "Downloading $t ..."
+    curl -fSL --progress-bar "$BASE_URL/$ref/$t" -o "$tmp/$t" \
+      || die "failed to download $t"
+  done
 
   info "Verifying checksums ..."
-  local t
-  for t in "$install_tarball" "$client_tarball"; do
+  for t in "${tarballs[@]}"; do
     if ! verify_checksum "$tmp/sha256sum.txt" "$t" "$tmp/$t"; then
       if [ "$platform" = "mac-arm64" ]; then
         info "  note: Apple Silicon binaries are re-signed/notarized after the mirror"
@@ -187,64 +213,93 @@ cmd_get() {
   done
 
   info "Extracting ..."
-  tar -xzf "$tmp/$install_tarball" -C "$tmp" openshift-install
-  tar -xzf "$tmp/$client_tarball"  -C "$tmp" oc kubectl
-
   mkdir -p "$BIN_DIR"
-  install -m 0755 "$tmp/openshift-install" "$BIN_DIR/openshift-install-$version"
-  install -m 0755 "$tmp/oc"                "$BIN_DIR/oc-$version"
-  install -m 0755 "$tmp/kubectl"           "$BIN_DIR/kubectl-$version"
-
   info "Installed:"
-  info "  $BIN_DIR/openshift-install-$version"
-  info "  $BIN_DIR/oc-$version"
-  info "  $BIN_DIR/kubectl-$version"
+  if [ "$need_installer" = 1 ]; then
+    tar -xzf "$tmp/$install_tarball" -C "$tmp" openshift-install
+    install -m 0755 "$tmp/openshift-install" "$BIN_DIR/openshift-install-$version"
+    info "  $BIN_DIR/openshift-install-$version"
+  fi
+  if [ "$need_client" = 1 ]; then
+    tar -xzf "$tmp/$client_tarball" -C "$tmp" oc kubectl
+    install -m 0755 "$tmp/oc"      "$BIN_DIR/oc-$version"
+    install -m 0755 "$tmp/kubectl" "$BIN_DIR/kubectl-$version"
+    info "  $BIN_DIR/oc-$version"
+    info "  $BIN_DIR/kubectl-$version"
+  fi
   info "Run 'ocp use $version' to activate it."
   check_path
 }
 
-# Echo the active version (the target of the openshift-install symlink), or nothing.
+# Echo the active version, read from the first bare symlink that exists.
+# Falls back oc/kubectl so a cli-only active version is still detected.
 active_version() {
-  local link="$BIN_DIR/openshift-install" target
-  [ -L "$link" ] || return 0
-  target="$(readlink "$link")"
-  printf '%s\n' "${target##*openshift-install-}"
+  local bare link target
+  for bare in openshift-install oc kubectl; do
+    link="$BIN_DIR/$bare"
+    [ -L "$link" ] || continue
+    target="$(readlink "$link")"
+    printf '%s\n' "${target##*$bare-}"
+    return 0
+  done
 }
 
 cmd_use() {
   local version="${1:-}"
   [ -n "$version" ] || die "usage: ocp use <version>"
 
+  # Tolerate partial installs: require at least one component, not all three.
+  local bare any=0
   for bare in openshift-install oc kubectl; do
-    [ -x "$BIN_DIR/$bare-$version" ] \
-      || die "$bare-$version not installed; run 'ocp get $version' first"
+    [ -x "$BIN_DIR/$bare-$version" ] && any=1
   done
+  [ "$any" = 1 ] || die "$version not installed; run 'ocp get $version' first"
 
-  for bare in openshift-install oc kubectl; do
-    cd "$BIN_DIR/"
-    rm -f "$bare"   # portable replace (BSD ln lacks -n)
-    ln -s "$bare-$version" "$bare"
-  done
-  info "Now using OCP $version (openshift-install, oc, kubectl)"
+  # Relative links, contained to a subshell so the cd doesn't leak.
+  ( cd "$BIN_DIR" || die "cannot cd to $BIN_DIR"
+    for bare in openshift-install oc kubectl; do
+      rm -f "$bare"   # portable replace (BSD ln lacks -n)
+      if [ -x "$bare-$version" ]; then
+        ln -s "$bare-$version" "$bare"
+      else
+        info "warning: $bare not installed for $version; '$bare' unset"
+      fi
+    done )
+  info "Now using OCP $version"
   check_path
 }
 
 cmd_list() {
-  local active f version found=0
+  local active comp f
   active="$(active_version)"
+
+  # Union versions across all components so cli-only / installer-only
+  # installs are listed too (not just those with openshift-install).
   shopt -s nullglob
-  for f in "$BIN_DIR"/openshift-install-*; do
-    [ -L "$f" ] && continue   # skip the bare symlink if it matched
-    version="${f##*/openshift-install-}"
-    found=1
-    if [ "$version" = "$active" ]; then
-      printf '* %s\n' "$version"
-    else
-      printf '  %s\n' "$version"
-    fi
+  local versions=()
+  for comp in openshift-install oc kubectl; do
+    for f in "$BIN_DIR/$comp"-*; do
+      [ -L "$f" ] && continue   # skip the bare symlink if it matched
+      versions+=("${f##*/$comp-}")
+    done
   done
   shopt -u nullglob
-  [ "$found" = 1 ] || info "no versions installed; try 'ocp get <version>'"
+
+  if [ "${#versions[@]}" -eq 0 ]; then
+    info "no versions installed; try 'ocp get <version>'"
+    return 0
+  fi
+
+  # Unique, version-sorted; annotate each with the components present.
+  local version marker present
+  printf '%s\n' "${versions[@]}" | vsort | uniq | while IFS= read -r version; do
+    present=""
+    [ -x "$BIN_DIR/openshift-install-$version" ] && present="${present:+$present, }installer"
+    [ -x "$BIN_DIR/oc-$version" ]                && present="${present:+$present, }oc"
+    [ -x "$BIN_DIR/kubectl-$version" ]           && present="${present:+$present, }kubectl"
+    [ "$version" = "$active" ] && marker='*' || marker=' '
+    printf '%s %s  (%s)\n' "$marker" "$version" "$present"
+  done
 }
 
 cmd_list_remote() {
