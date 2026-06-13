@@ -17,8 +17,13 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
+VERSION="0.1.0"
+
 BASE_URL="https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp"
 BIN_DIR="${OCP_BIN_DIR:-$HOME/.local/bin}"
+
+# Where 'ocp update' pulls a fresh copy of this script from. Override for forks.
+UPDATE_URL="${OCP_UPDATE_URL:-https://raw.githubusercontent.com/lmcclint/ocp-version-manager/main/ocp}"
 
 # Tarball names are version-qualified (e.g. openshift-install-linux-4.14.1.tar.gz).
 # These versioned names are listed in sha256sum.txt for both exact-version and
@@ -96,6 +101,8 @@ Usage:
   ocp list                    List installed versions (* = active)
   ocp list-remote [X.Y]       List versions available on the mirror
   ocp remove <version>        Remove an installed version
+  ocp update                  Update ocp itself to the latest version
+  ocp --version               Print the ocp version
 
 Examples:
   ocp get 4.14.1
@@ -113,6 +120,7 @@ Environment:
   OCP_PLATFORM   force platform: linux | linux-arm64 | mac | mac-arm64
                  (default: auto-detected from uname)
   OCP_INSECURE   set to 1 to continue past a checksum mismatch
+  OCP_UPDATE_URL source URL for 'ocp update' (default: GitHub raw, main)
 EOF
 }
 
@@ -341,6 +349,60 @@ cmd_remove() {
   info "Removed OCP $version"
 }
 
+# Absolute path of this running script, resolving a PATH lookup and symlinks.
+self_path() {
+  local src="$0" dir target
+  case "$src" in
+    */*) ;;
+    *) src="$(command -v -- "$src" 2>/dev/null || true)"
+       [ -n "$src" ] || die "cannot locate the running script ($0)" ;;
+  esac
+  while [ -L "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    target="$(readlink "$src")"
+    case "$target" in
+      /*) src="$target" ;;
+      *)  src="$dir/$target" ;;
+    esac
+  done
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  printf '%s/%s\n' "$dir" "$(basename "$src")"
+}
+
+# Replace this script with the latest copy from UPDATE_URL.
+cmd_update() {
+  require curl
+  local self dir tmp staging newver
+  self="$(self_path)"
+  dir="$(dirname "$self")"
+  [ -w "$self" ] || die "$self is not writable (re-run with the right permissions)"
+  [ -w "$dir" ]  || die "$dir is not writable (cannot stage the update)"
+
+  WORKDIR="$(mktemp -d)"
+  tmp="$WORKDIR/ocp"
+  info "Downloading latest ocp from $UPDATE_URL ..."
+  curl -fsSL "$UPDATE_URL" -o "$tmp" || die "failed to download update"
+
+  # Refuse to install anything that isn't a valid shell script (guards against
+  # an HTML error page or a truncated download bricking the tool).
+  head -n1 "$tmp" | grep -qE '^#!.*(bash|sh)' || die "download is not a shell script; aborting"
+  bash -n "$tmp" || die "downloaded script failed its syntax check; aborting"
+
+  newver="$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' "$tmp" | head -n1)"
+  [ -n "$newver" ] || newver="(unknown)"
+  if [ "$newver" = "$VERSION" ]; then
+    info "Already up to date (version $VERSION)"
+    return 0
+  fi
+
+  # Atomic replace: stage next to the target, then rename over it.
+  staging="$(mktemp "$dir/.ocp.XXXXXX")" || die "cannot create temp file in $dir"
+  if ! cp "$tmp" "$staging"; then rm -f "$staging"; die "failed to stage update"; fi
+  chmod 0755 "$staging"
+  mv -f "$staging" "$self" || { rm -f "$staging"; die "failed to install update to $self"; }
+  info "Updated ocp: $VERSION -> $newver"
+}
+
 # ---- dispatch --------------------------------------------------------------
 
 main() {
@@ -352,6 +414,8 @@ main() {
     list)        cmd_list "$@" ;;
     list-remote) cmd_list_remote "$@" ;;
     remove|rm)   cmd_remove "$@" ;;
+    update|--update) cmd_update "$@" ;;
+    --version|-V|version) printf 'ocp %s\n' "$VERSION" ;;
     ""|-h|--help|help) usage ;;
     *) err "unknown command: $sub"; usage; exit 1 ;;
   esac
