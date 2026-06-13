@@ -58,6 +58,18 @@ currently resolves to — handy for seeing, e.g., what `stable-4.20` points at
 before installing. (`list-remote` remains as a hidden alias for
 `list-versions`.)
 
+Both commands annotate anything you already have installed locally with
+`(installed: ...)` and the components present, so you can tell at a glance
+what's downloaded:
+
+```
+$ ocp list-channels 4.20
+candidate-4.20   4.20.25
+fast-4.20        4.20.24  (installed: installer, oc, kubectl)
+latest-4.20      4.20.24  (installed: installer, oc, kubectl)
+stable-4.20      4.20.24  (installed: installer, oc, kubectl)
+```
+
 ### Examples
 
 ```sh

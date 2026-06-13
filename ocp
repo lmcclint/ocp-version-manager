@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 
 BASE_URL="https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp"
 BIN_DIR="${OCP_BIN_DIR:-$HOME/.local/bin}"
@@ -264,6 +264,16 @@ active_version() {
   done
 }
 
+# Echo the components installed for a version as a comma-joined list
+# (e.g. "installer, oc, kubectl"), or nothing if none are installed.
+installed_components() {
+  local version="$1" present=""
+  [ -x "$BIN_DIR/openshift-install-$version" ] && present="${present:+$present, }installer"
+  [ -x "$BIN_DIR/oc-$version" ]                && present="${present:+$present, }oc"
+  [ -x "$BIN_DIR/kubectl-$version" ]           && present="${present:+$present, }kubectl"
+  printf '%s' "$present"
+}
+
 cmd_use() {
   local version="${1:-}"
   [ -n "$version" ] || die "usage: ocp use <version>"
@@ -311,14 +321,10 @@ cmd_list() {
   fi
 
   # Unique, version-sorted; annotate each with the components present.
-  local version marker present
+  local version marker
   printf '%s\n' "${versions[@]}" | vsort | uniq | while IFS= read -r version; do
-    present=""
-    [ -x "$BIN_DIR/openshift-install-$version" ] && present="${present:+$present, }installer"
-    [ -x "$BIN_DIR/oc-$version" ]                && present="${present:+$present, }oc"
-    [ -x "$BIN_DIR/kubectl-$version" ]           && present="${present:+$present, }kubectl"
     [ "$version" = "$active" ] && marker='*' || marker=' '
-    printf '%s %s  (%s)\n' "$marker" "$version" "$present"
+    printf '%s %s  (%s)\n' "$marker" "$version" "$(installed_components "$version")"
   done
 }
 
@@ -353,7 +359,17 @@ cmd_list_versions() {
     info "no versions on the mirror match '${1:-}'"
     return 0
   fi
-  printf '%s\n' "$results"
+
+  # Annotate any version already installed locally with its components.
+  local version comps
+  printf '%s\n' "$results" | while IFS= read -r version; do
+    comps="$(installed_components "$version")"
+    if [ -n "$comps" ]; then
+      printf '%s  (installed: %s)\n' "$version" "$comps"
+    else
+      printf '%s\n' "$version"
+    fi
+  done
 }
 
 # List the release channels for a minor (candidate/fast/stable/latest-X.Y)
@@ -381,11 +397,17 @@ cmd_list_channels() {
     return 0
   fi
 
-  local ch ver
+  local ch ver comps
   while IFS= read -r ch; do
     ver="$(curl -fsSL "$BASE_URL/$ch/release.txt" 2>/dev/null \
       | sed -n 's/^Name:[[:space:]]*//p' | head -n1)" || true
-    printf '%-16s %s\n' "$ch" "${ver:-(unresolved)}"
+    comps=""
+    [ -n "$ver" ] && comps="$(installed_components "$ver")"
+    if [ -n "$comps" ]; then
+      printf '%-16s %s  (installed: %s)\n' "$ch" "$ver" "$comps"
+    else
+      printf '%-16s %s\n' "$ch" "${ver:-(unresolved)}"
+    fi
   done <<EOF
 $channels
 EOF
