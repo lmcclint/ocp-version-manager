@@ -36,6 +36,10 @@ HTML
 esac
 CURL
 
+# Isolate from the real ~/.local/bin so 'installed:' annotations are controlled.
+export OCP_BIN_DIR="$TESTDIR/bin-dir"
+mkdir -p "$OCP_BIN_DIR"
+
 echo "=== list-versions: channel filter reduces to its X.Y line ==="
 out="$("$OCP" list-versions stable-4.20 2>/dev/null)"
 assert_re '^4\.20\.0$'  "$out" "lists 4.20.0"
@@ -87,5 +91,17 @@ out="$("$OCP" list-channels 9.99 2>/dev/null)"; rc=$?
 assert_eq 0 "$rc" "exit 0 on no match"
 err="$("$OCP" list-channels 9.99 2>&1 >/dev/null)"
 assert_re "no channels on the mirror match '9.99'" "$err" "no-match message"
+
+echo "=== installed annotation reflects local components ==="
+stub "$OCP_BIN_DIR/oc-4.20.1"; stub "$OCP_BIN_DIR/kubectl-4.20.1"          # cli-only
+for b in openshift-install oc kubectl; do stub "$OCP_BIN_DIR/$b-4.20.24"; done  # full (stable-4.20 target)
+
+out="$("$OCP" list-versions 4.20 2>/dev/null)"
+assert_re '^4\.20\.1  \(installed: oc, kubectl\)$' "$out" "list-versions annotates partial install"
+assert_re '^4\.20\.0$' "$out" "list-versions leaves uninstalled versions plain"
+
+out="$("$OCP" list-channels 4.20 2>/dev/null)"
+assert_re '^stable-4\.20[[:space:]]+4\.20\.24[[:space:]]+\(installed: installer, oc, kubectl\)$' "$out" "list-channels annotates installed channel target"
+assert_no_re 'candidate-4\.20.*installed' "$out" "list-channels leaves uninstalled targets plain"
 
 finish
