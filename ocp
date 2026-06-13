@@ -87,10 +87,11 @@ usage() {
 ocp - OpenShift installer/client version manager
 
 Usage:
-  ocp get [--cli-only|--installer-only] <version|channel>
+  ocp get [--cli-only|--installer-only] [--use] <version|channel>
                               Download, verify and install a version.
                               --cli-only       only oc + kubectl
                               --installer-only only openshift-install
+                              --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
   ocp list                    List installed versions (* = active)
   ocp list-remote [X.Y]       List versions available on the mirror
@@ -101,6 +102,7 @@ Examples:
   ocp get stable-4.15
   ocp get --cli-only 4.14.1
   ocp get --installer-only stable-4.15
+  ocp get --use 4.14.1
   ocp use 4.14.1
   ocp list-remote 4.14
 
@@ -143,11 +145,12 @@ verify_checksum() {
 
 cmd_get() {
   # "cli" = the client tarball (oc + kubectl); "installer" = openshift-install.
-  local ref="" want_cli=1 want_installer=1
+  local ref="" want_cli=1 want_installer=1 do_use=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --cli-only)       want_installer=0 ;;
       --installer-only) want_cli=0 ;;
+      --use)            do_use=1 ;;
       -*) die "unknown flag: $1 (see 'ocp --help')" ;;
       *)  [ -z "$ref" ] || die "unexpected argument: $1"; ref="$1" ;;
     esac
@@ -171,7 +174,7 @@ cmd_get() {
 
   if [ "$need_installer" = 0 ] && [ "$need_client" = 0 ]; then
     info "$version already installed (requested components present)"
-    check_path
+    if [ "$do_use" = 1 ]; then cmd_use "$version"; else check_path; fi
     return 0
   fi
 
@@ -227,8 +230,12 @@ cmd_get() {
     info "  $BIN_DIR/oc-$version"
     info "  $BIN_DIR/kubectl-$version"
   fi
-  info "Run 'ocp use $version' to activate it."
-  check_path
+  if [ "$do_use" = 1 ]; then
+    cmd_use "$version"
+  else
+    info "Run 'ocp use $version' to activate it."
+    check_path
+  fi
 }
 
 # Echo the active version, read from the first bare symlink that exists.
