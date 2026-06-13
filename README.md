@@ -27,7 +27,7 @@ ocp get --cli-only <ver>    # only the client (oc + kubectl)
 ocp get --installer-only <ver>  # only openshift-install
 ocp get --use <ver>         # install, then activate it (runs 'use')
 ocp use <version>           # activate a version (swap openshift-install/oc/kubectl)
-ocp list                    # list installed versions (* = active, with components)
+ocp list                    # list installed versions (* = active, with components + total size)
 ocp list-versions [X.Y|chan]  # list versions on the mirror (e.g. 4.20, stable-4.20)
 ocp list-channels <X.Y>     # list a minor's channels + the version each points to
 ocp remove <version>        # remove an installed version's binaries
