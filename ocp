@@ -221,8 +221,9 @@ cmd_use() {
   done
 
   for bare in openshift-install oc kubectl; do
-    rm -f "$BIN_DIR/$bare"   # portable replace (BSD ln lacks -n)
-    ln -s "$BIN_DIR/$bare-$version" "$BIN_DIR/$bare"
+    cd "$BIN_DIR/"
+    rm -f "$bare"   # portable replace (BSD ln lacks -n)
+    ln -s "$bare-$version" "$bare"
   done
   info "Now using OCP $version (openshift-install, oc, kubectl)"
   check_path
