@@ -10,14 +10,15 @@
 #   ocp get <version|channel>   Download + verify + install a version
 #   ocp use <version>           Point openshift-install/oc/kubectl at a version
 #   ocp list                    List installed versions (* = active)
-#   ocp list-remote [X.Y]       List versions available on the mirror
+#   ocp list-versions [X.Y]     List versions available on the mirror
+#   ocp list-channels <X.Y>     List a minor's channels and their versions
 #   ocp remove <version>        Remove an installed version's binaries
 #
 set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.1.1"
+VERSION="0.2.0"
 
 BASE_URL="https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp"
 BIN_DIR="${OCP_BIN_DIR:-$HOME/.local/bin}"
@@ -101,7 +102,8 @@ Usage:
                               --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
   ocp list                    List installed versions (* = active)
-  ocp list-remote [X.Y]       List versions available on the mirror
+  ocp list-versions [X.Y]     List versions available on the mirror
+  ocp list-channels <X.Y>     List a minor's channels and the version each points to
   ocp remove <version>        Remove an installed version
   ocp update                  Update ocp itself to the latest version
   ocp --version               Print the ocp version
@@ -113,7 +115,8 @@ Examples:
   ocp get --installer-only stable-4.15
   ocp get --use 4.14.1
   ocp use 4.14.1
-  ocp list-remote 4.14
+  ocp list-versions 4.14
+  ocp list-channels 4.14
 
 Binaries are installed to: $BIN_DIR
 
@@ -319,12 +322,12 @@ cmd_list() {
   done
 }
 
-cmd_list_remote() {
+cmd_list_versions() {
   require curl
   local filter="${1:-}" url="$BASE_URL/" pat=""
   if [ -n "$filter" ]; then
     # Reduce a channel-style filter (stable-4.20, fast-4.16, ...) to its
-    # version part so 'list-remote stable-4.20' lists the 4.20 line, the same
+    # version part so 'list-versions stable-4.20' lists the 4.20 line, the same
     # way channels are accepted by 'get'/'use'.
     filter="$(printf '%s\n' "$filter" | sed -E 's/^[A-Za-z]+-//')"
     # Anchor at a version-segment boundary (next char is '.' or end of line)
@@ -351,6 +354,41 @@ cmd_list_remote() {
     return 0
   fi
   printf '%s\n' "$results"
+}
+
+# List the release channels for a minor (candidate/fast/stable/latest-X.Y)
+# alongside the concrete version each currently points to.
+cmd_list_channels() {
+  require curl
+  local filter="${1:-}"
+  [ -n "$filter" ] || die "usage: ocp list-channels <X.Y>  (e.g. ocp list-channels 4.20)"
+  # Accept 'stable-4.20' too by reducing it to its X.Y part.
+  filter="$(printf '%s\n' "$filter" | sed -E 's/^[A-Za-z]+-//')"
+
+  local listing channels
+  listing="$(curl -fsSL "$BASE_URL/")" || die "failed to list $BASE_URL/"
+  # Channel dirs start with a letter; keep those ending at the requested X.Y
+  # (preceded by '-' or line start) so '4.2' doesn't match '4.20'.
+  channels="$(printf '%s\n' "$listing" \
+    | grep -oE 'href="[^"]+/"' \
+    | sed -E 's/href="([^"]+)\/"/\1/' \
+    | grep -E '^[A-Za-z]' \
+    | grep -E "(^|-)${filter//./\\.}\$" \
+    | vsort | uniq)" || true
+
+  if [ -z "$channels" ]; then
+    info "no channels on the mirror match '${1:-}'"
+    return 0
+  fi
+
+  local ch ver
+  while IFS= read -r ch; do
+    ver="$(curl -fsSL "$BASE_URL/$ch/release.txt" 2>/dev/null \
+      | sed -n 's/^Name:[[:space:]]*//p' | head -n1)" || true
+    printf '%-16s %s\n' "$ch" "${ver:-(unresolved)}"
+  done <<EOF
+$channels
+EOF
 }
 
 cmd_remove() {
@@ -436,7 +474,8 @@ main() {
     get)         cmd_get "$@" ;;
     use)         cmd_use "$@" ;;
     list)        cmd_list "$@" ;;
-    list-remote) cmd_list_remote "$@" ;;
+    list-versions|list-remote) cmd_list_versions "$@" ;;
+    list-channels) cmd_list_channels "$@" ;;
     remove|rm)   cmd_remove "$@" ;;
     update|--update) cmd_update "$@" ;;
     --version|-V|version) printf 'ocp %s\n' "$VERSION" ;;

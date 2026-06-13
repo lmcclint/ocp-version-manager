@@ -28,7 +28,8 @@ ocp get --installer-only <ver>  # only openshift-install
 ocp get --use <ver>         # install, then activate it (runs 'use')
 ocp use <version>           # activate a version (swap openshift-install/oc/kubectl)
 ocp list                    # list installed versions (* = active, with components)
-ocp list-remote [X.Y|chan]  # list versions on the mirror (e.g. 4.20, stable-4.20)
+ocp list-versions [X.Y|chan]  # list versions on the mirror (e.g. 4.20, stable-4.20)
+ocp list-channels <X.Y>     # list a minor's channels + the version each points to
 ocp remove <version>        # remove an installed version's binaries
 ocp update                  # update ocp itself to the latest version
 ocp --version               # print the ocp version
@@ -49,12 +50,21 @@ some components installed, `ocp use` links the ones present and unsets the bare
 symlink for any that are missing (warning as it does so), and `ocp list`
 annotates each version with the components it has.
 
+`ocp list-versions` lists the concrete versions on the mirror, optionally
+filtered by an `X.Y` (or a channel like `stable-4.20`, which is reduced to its
+`4.20` line). `ocp list-channels <X.Y>` lists that minor's release channels
+(`candidate-`, `fast-`, `latest-`, `stable-`) alongside the version each
+currently resolves to — handy for seeing, e.g., what `stable-4.20` points at
+before installing. (`list-remote` remains as a hidden alias for
+`list-versions`.)
+
 ### Examples
 
 ```sh
 ocp get 4.14.1              # exact version
 ocp get stable-4.15         # channel — resolves to the concrete version
-ocp list-remote 4.14        # all 4.14.z available on the mirror
+ocp list-versions 4.14      # all 4.14.z available on the mirror
+ocp list-channels 4.14      # 4.14 channels and the version each points to
 ocp use 4.14.1              # openshift-install/oc/kubectl now point at 4.14.1
 ocp list
 ```
