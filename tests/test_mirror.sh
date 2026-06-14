@@ -28,4 +28,21 @@ echo "=== remove deletes oc-mirror too ==="
 out="$("$OCP" remove 4.18.10 2>&1)"
 [ -e "$OCP_BIN_DIR/oc-mirror-4.18.10" ] && bad "oc-mirror-4.18.10 not removed" || ok "oc-mirror-4.18.10 removed"
 
+echo "=== use links oc-mirror when present ==="
+for b in openshift-install oc kubectl oc-mirror; do stub "$OCP_BIN_DIR/$b-4.18.11"; done
+out="$("$OCP" use 4.18.11 2>&1)"
+[ -L "$OCP_BIN_DIR/oc-mirror" ] && ok "oc-mirror symlink created" || bad "oc-mirror symlink missing"
+assert_eq "oc-mirror-4.18.11" "$(readlink "$OCP_BIN_DIR/oc-mirror")" "oc-mirror symlink is relative"
+
+echo "=== use a version without oc-mirror: no warning, bare oc-mirror unset ==="
+for b in openshift-install oc kubectl; do stub "$OCP_BIN_DIR/$b-4.18.12"; done   # no oc-mirror
+out="$("$OCP" use 4.18.12 2>&1)"
+assert_no_re 'oc-mirror' "$out" "no oc-mirror warning for versions without it"
+[ -e "$OCP_BIN_DIR/oc-mirror" ] && bad "stale oc-mirror symlink left" || ok "oc-mirror symlink cleared"
+
+echo "=== use a mirror-only install works (no error) ==="
+stub "$OCP_BIN_DIR/oc-mirror-4.18.13"
+"$OCP" use 4.18.13 >/dev/null 2>&1; assert_eq 0 "$?" "use mirror-only exits 0"
+assert_eq "oc-mirror-4.18.13" "$(readlink "$OCP_BIN_DIR/oc-mirror")" "mirror-only use links oc-mirror"
+
 finish

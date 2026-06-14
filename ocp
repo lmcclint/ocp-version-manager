@@ -296,20 +296,27 @@ cmd_use() {
 
   # Tolerate partial installs: require at least one component, not all three.
   local bare any=0
-  for bare in openshift-install oc kubectl; do
+  for bare in "${ALL_COMPONENTS[@]}"; do
     [ -x "$BIN_DIR/$bare-$version" ] && any=1
   done
   [ "$any" = 1 ] || die "$version not installed; run 'ocp get $version' first"
 
   # Relative links, contained to a subshell so the cd doesn't leak.
   ( cd "$BIN_DIR" || die "cannot cd to $BIN_DIR"
-    for bare in openshift-install oc kubectl; do
+    for bare in "${CORE_COMPONENTS[@]}"; do
       rm -f "$bare"   # portable replace (BSD ln lacks -n)
       if [ -x "$bare-$version" ]; then
         ln -s "$bare-$version" "$bare"
       else
         info "warning: $bare not installed for $version; '$bare' unset"
       fi
+    done
+    # Optional components: link when present, silently clear otherwise so the
+    # bare link never dangles to a different version (no warning -- most users
+    # never install these).
+    for bare in "${OPTIONAL_COMPONENTS[@]}"; do
+      rm -f "$bare"
+      [ -x "$bare-$version" ] && ln -s "$bare-$version" "$bare"
     done )
   info "Now using OCP $version"
   check_path
