@@ -36,6 +36,13 @@ UPDATE_URL="${OCP_UPDATE_URL:-https://raw.githubusercontent.com/lmcclint/ocp-ver
 # These versioned names are listed in sha256sum.txt for both exact-version and
 # channel directories, whereas the generic names are not present in exact dirs.
 
+# Components ocp manages. The first three are "core": always expected, and
+# 'use' warns + unsets the bare link when one is missing. oc-mirror is optional
+# (Linux-only, opt-in): linked when present, silently skipped when absent.
+CORE_COMPONENTS=(openshift-install oc kubectl)
+OPTIONAL_COMPONENTS=(oc-mirror)
+ALL_COMPONENTS=("${CORE_COMPONENTS[@]}" "${OPTIONAL_COMPONENTS[@]}")
+
 # ---- helpers ---------------------------------------------------------------
 
 err()  { printf 'error: %s\n' "$*" >&2; }
@@ -263,7 +270,7 @@ cmd_get() {
 # Falls back oc/kubectl so a cli-only active version is still detected.
 active_version() {
   local bare link target
-  for bare in openshift-install oc kubectl; do
+  for bare in "${ALL_COMPONENTS[@]}"; do
     link="$BIN_DIR/$bare"
     [ -L "$link" ] || continue
     target="$(readlink "$link")"
@@ -279,6 +286,7 @@ installed_components() {
   [ -x "$BIN_DIR/openshift-install-$version" ] && present="${present:+$present, }installer"
   [ -x "$BIN_DIR/oc-$version" ]                && present="${present:+$present, }oc"
   [ -x "$BIN_DIR/kubectl-$version" ]           && present="${present:+$present, }kubectl"
+  [ -x "$BIN_DIR/oc-mirror-$version" ]         && present="${present:+$present, }oc-mirror"
   printf '%s' "$present"
 }
 
@@ -316,9 +324,11 @@ cmd_list() {
   # the real files too, for the total-size summary.
   shopt -s nullglob
   local versions=() files=()
-  for comp in openshift-install oc kubectl; do
+  for comp in "${ALL_COMPONENTS[@]}"; do
     for f in "$BIN_DIR/$comp"-*; do
       [ -L "$f" ] && continue   # skip the bare symlink if it matched
+      # 'oc-*' also matches 'oc-mirror-*'; oc-mirror is gathered on its own pass.
+      [ "$comp" = oc ] && case "${f##*/}" in oc-mirror-*) continue ;; esac
       versions+=("${f##*/$comp-}")
       files+=("$f")
     done
@@ -438,7 +448,7 @@ cmd_remove() {
     info "warning: $version is the active version; symlinks will dangle until you 'ocp use' another"
   fi
 
-  for bare in openshift-install oc kubectl; do
+  for bare in "${ALL_COMPONENTS[@]}"; do
     if [ -e "$BIN_DIR/$bare-$version" ]; then
       rm -f "$BIN_DIR/$bare-$version"
       removed=1
