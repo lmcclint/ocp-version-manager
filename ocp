@@ -316,7 +316,7 @@ cmd_use() {
     # never install these).
     for bare in "${OPTIONAL_COMPONENTS[@]}"; do
       rm -f "$bare"
-      [ -x "$bare-$version" ] && ln -s "$bare-$version" "$bare"
+      if [ -x "$bare-$version" ]; then ln -s "$bare-$version" "$bare"; fi
     done )
   info "Now using OCP $version"
   check_path

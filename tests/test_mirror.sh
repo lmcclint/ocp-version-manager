@@ -37,6 +37,8 @@ assert_eq "oc-mirror-4.18.11" "$(readlink "$OCP_BIN_DIR/oc-mirror")" "oc-mirror 
 echo "=== use a version without oc-mirror: no warning, bare oc-mirror unset ==="
 for b in openshift-install oc kubectl; do stub "$OCP_BIN_DIR/$b-4.18.12"; done   # no oc-mirror
 out="$("$OCP" use 4.18.12 2>&1)"
+rc=$?; assert_eq 0 "$rc" "use without oc-mirror exits 0"
+assert_re 'Now using OCP 4.18.12' "$out" "use without oc-mirror still reports success"
 assert_no_re 'oc-mirror' "$out" "no oc-mirror warning for versions without it"
 [ -e "$OCP_BIN_DIR/oc-mirror" ] && bad "stale oc-mirror symlink left" || ok "oc-mirror symlink cleared"
 
