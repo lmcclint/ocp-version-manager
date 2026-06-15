@@ -74,6 +74,15 @@ else
     ( cd "$b" && tar -czf "$out" oc-mirror )
   }
 
+  # Build a tarball whose members are the given stub binaries (each just exits 0).
+  mk_core_tar() {  # <out-tar> <member>...
+    local out="$1"; shift
+    local b="$TESTDIR/cbuild"; rm -rf "$b"; mkdir -p "$b"
+    local m
+    for m in "$@"; do printf '#!/bin/sh\nexit 0\n' > "$b/$m"; chmod +x "$b/$m"; done
+    ( cd "$b" && tar -czf "$out" "$@" )
+  }
+
   MIR="$TESTDIR/mirror"
   X="$MIR/x86_64/clients/ocp/4.18.10"; A="$MIR/arm64/clients/ocp/4.18.10"
   P="$MIR/x86_64/clients/ocp/4.17.0"   # a version with only the plain build
@@ -86,7 +95,10 @@ else
   mk_mirror_tar "$A/oc-mirror.tar.gz"       "rhel8-arm"
   mk_mirror_tar "$A/oc-mirror.rhel9.tar.gz" "rhel9-arm"
   mk_mirror_tar "$P/oc-mirror.tar.gz"       "rhel8-only"
-  ( cd "$X" && sha256f oc-mirror.tar.gz oc-mirror.rhel9.tar.gz > sha256sum.txt )
+  mk_core_tar "$X/openshift-install-linux-4.18.10.tar.gz" openshift-install
+  mk_core_tar "$X/openshift-client-linux-4.18.10.tar.gz"  oc kubectl
+  ( cd "$X" && sha256f oc-mirror.tar.gz oc-mirror.rhel9.tar.gz \
+      openshift-install-linux-4.18.10.tar.gz openshift-client-linux-4.18.10.tar.gz > sha256sum.txt )
   ( cd "$A" && sha256f oc-mirror.tar.gz oc-mirror.rhel9.tar.gz > sha256sum.txt )
   ( cd "$P" && sha256f oc-mirror.tar.gz                        > sha256sum.txt )
 
@@ -111,10 +123,18 @@ else
   OCP_PLATFORM=linux-arm64 "$OCP" get --mirror-only 4.18.10 >/dev/null 2>&1
   assert_eq "rhel9-arm" "$("$OCP_BIN_DIR/oc-mirror-4.18.10" 2>&1)" "arm64 fetch hits the arm64 tree"
 
-  echo "--- OCP_WITH_MIRROR opts oc-mirror into a default get ---"
+  echo "--- a bare get installs only core (no oc-mirror) ---"
   "$OCP" remove 4.18.10 >/dev/null 2>&1
-  OCP_PLATFORM=linux OCP_WITH_MIRROR=1 "$OCP" get --mirror-only 4.18.10 >/dev/null 2>&1
-  [ -x "$OCP_BIN_DIR/oc-mirror-4.18.10" ] && ok "OCP_WITH_MIRROR fetched oc-mirror" || bad "OCP_WITH_MIRROR did not fetch oc-mirror"
+  OCP_PLATFORM=linux "$OCP" get 4.18.10 >/dev/null 2>&1
+  [ -x "$OCP_BIN_DIR/openshift-install-4.18.10" ] && ok "bare get installed installer" || bad "bare get missing installer"
+  [ -x "$OCP_BIN_DIR/oc-4.18.10" ]                && ok "bare get installed oc"        || bad "bare get missing oc"
+  [ -e "$OCP_BIN_DIR/oc-mirror-4.18.10" ] && bad "bare get should not fetch oc-mirror" || ok "bare get skips oc-mirror"
+
+  echo "--- OCP_WITH_MIRROR=1 adds oc-mirror to a bare get ---"
+  "$OCP" remove 4.18.10 >/dev/null 2>&1
+  OCP_PLATFORM=linux OCP_WITH_MIRROR=1 "$OCP" get 4.18.10 >/dev/null 2>&1
+  [ -x "$OCP_BIN_DIR/oc-mirror-4.18.10" ] && ok "OCP_WITH_MIRROR fetched oc-mirror on a bare get" || bad "OCP_WITH_MIRROR did not fetch oc-mirror"
+  [ -x "$OCP_BIN_DIR/openshift-install-4.18.10" ] && ok "core still installed alongside oc-mirror" || bad "core missing"
 
   echo "--- already-installed is a no-op ---"
   out="$(OCP_PLATFORM=linux "$OCP" get --mirror-only 4.18.10 2>&1)"
