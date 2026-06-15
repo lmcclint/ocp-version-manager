@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bash (single-file `ocp` script), the existing offline test harness in `tests/` (fake `curl`, `file://` URLs, stub binaries).
 
-**Spec:** `docs/superpowers/specs/2026-06-14-ocp-oc-mirror-design.md`
+**Spec:** `docs/specs/2026-06-14-ocp-oc-mirror-design.md`
 
 ---
 
