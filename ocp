@@ -108,10 +108,13 @@ usage() {
 ocp - OpenShift installer/client version manager
 
 Usage:
-  ocp get [--cli-only|--installer-only] [--use] <version|channel>
+  ocp get [--cli-only|--installer-only|--mirror-only|--with-mirror] [--rhel8] [--use] <version|channel>
                               Download, verify and install a version.
                               --cli-only       only oc + kubectl
                               --installer-only only openshift-install
+                              --mirror-only    only oc-mirror (Linux only)
+                              --with-mirror    also fetch oc-mirror
+                              --rhel8          oc-mirror: force the RHEL8 build
                               --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
   ocp list                    List installed versions (* = active)
@@ -138,6 +141,7 @@ Environment:
   OCP_PLATFORM   force platform: linux | linux-arm64 | mac | mac-arm64
                  (default: auto-detected from uname)
   OCP_INSECURE   set to 1 to continue past a checksum mismatch
+  OCP_WITH_MIRROR set to 1 to always include oc-mirror in a default 'get'
   OCP_BASE_URL   mirror clients dir (default: the cross-platform x86_64 tree,
                  which also serves the arm64 + mac binaries)
   OCP_UPDATE_URL source URL for 'ocp update' (default: GitHub raw, main)
