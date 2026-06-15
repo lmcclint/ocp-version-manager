@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.5.1"
+VERSION="0.6.0"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -31,6 +31,11 @@ BIN_DIR="${OCP_BIN_DIR:-$HOME/.local/bin}"
 
 # Where 'ocp update' pulls a fresh copy of this script from. Override for forks.
 UPDATE_URL="${OCP_UPDATE_URL:-https://raw.githubusercontent.com/lmcclint/ocp-version-manager/main/ocp}"
+
+# Where 'ocp update' reads release notes from. Derived from UPDATE_URL by
+# swapping the trailing 'ocp' for 'CHANGELOG.md'; override for forks/custom
+# layouts (e.g. if OCP_UPDATE_URL doesn't end in 'ocp').
+CHANGELOG_URL="${OCP_CHANGELOG_URL:-${UPDATE_URL%ocp}CHANGELOG.md}"
 
 # Tarball names are version-qualified (e.g. openshift-install-linux-4.14.1.tar.gz).
 # These versioned names are listed in sha256sum.txt for both exact-version and
@@ -87,6 +92,37 @@ sha256_of() {
 # Portable version sort: GNU 'sort -V' if available, else plain sort.
 vsort() {
   if printf '1\n2\n' | sort -V >/dev/null 2>&1; then sort -V; else sort; fi
+}
+
+# True if version $1 is strictly greater than version $2 (per vsort ordering).
+ver_gt() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | vsort | tail -n1)" = "$1" ]
+}
+
+# Fetch CHANGELOG.md and print the sections for versions in (old, new].
+# Best-effort: any failure prints a note and returns 0 so it never blocks an
+# update. Args: <old-version> <new-version>.
+print_release_notes() {
+  local old="$1" new="$2" body vers v wanted=""
+  body="$(curl -fsSL "$CHANGELOG_URL" 2>/dev/null)" \
+    || { info "release notes unavailable"; return 0; }
+  [ -n "$body" ] || { info "release notes unavailable"; return 0; }
+
+  # Versions of each '## X.Y.Z' header that fall in (old, new].
+  vers="$(printf '%s\n' "$body" | sed -n 's/^## \([0-9][0-9.]*\).*/\1/p')"
+  for v in $vers; do
+    if ver_gt "$v" "$old" && ! ver_gt "$v" "$new"; then
+      wanted="$wanted $v"
+    fi
+  done
+  [ -n "$wanted" ] || { info "release notes unavailable"; return 0; }
+
+  info "Changes in this update:"
+  # Print each wanted section (header + body) verbatim, in file order, to stderr.
+  printf '%s\n' "$body" | awk -v want=" $wanted " '
+    /^## / { split($0, a, " "); show = (index(want, " " a[2] " ") > 0) }
+    show { print }
+  ' >&2
 }
 
 # Single workdir, cleaned up once on exit (avoids per-function RETURN traps).
@@ -148,6 +184,7 @@ Environment:
   OCP_BASE_URL   mirror clients dir (default: the cross-platform x86_64 tree,
                  which also serves the arm64 + mac binaries)
   OCP_UPDATE_URL source URL for 'ocp update' (default: GitHub raw, main)
+  OCP_CHANGELOG_URL source URL for release notes (default: derived from OCP_UPDATE_URL)
 EOF
 }
 
@@ -629,6 +666,7 @@ cmd_update() {
   if ! cp "$tmp" "$staging"; then rm -f "$staging"; die "failed to stage update"; fi
   chmod 0755 "$staging"
   mv -f "$staging" "$self" || { rm -f "$staging"; die "failed to install update to $self"; }
+  print_release_notes "$VERSION" "$newver"
   info "Updated ocp: $VERSION -> $newver"
 }
 
