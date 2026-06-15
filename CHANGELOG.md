@@ -4,6 +4,10 @@ All notable changes to `ocp`. Newest first. Each `## X.Y.Z` section matches a
 `VERSION` released to `main`; `ocp update` prints the sections between a user's
 current version and the version they update to.
 
+## 0.6.0
+- `ocp update` now prints release notes (CHANGELOG.md sections) for the versions you update across
+- add `OCP_CHANGELOG_URL` to override the changelog source
+
 ## 0.5.1
 - fix arm64 oc-mirror mirror-tree fallback
 
