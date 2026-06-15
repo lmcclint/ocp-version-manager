@@ -47,4 +47,78 @@ stub "$OCP_BIN_DIR/oc-mirror-4.18.13"
 "$OCP" use 4.18.13 >/dev/null 2>&1; assert_eq 0 "$?" "use mirror-only exits 0"
 assert_eq "oc-mirror-4.18.13" "$(readlink "$OCP_BIN_DIR/oc-mirror")" "mirror-only use links oc-mirror"
 
+echo "=== get: oc-mirror flag conflicts (offline) ==="
+err="$("$OCP" get --mirror-only --cli-only 4.18.10 2>&1)"
+assert_re 'mirror-only' "$err" "--mirror-only + --cli-only rejected"
+err="$("$OCP" get --mirror-only --installer-only 4.18.10 2>&1)"
+assert_re 'mirror-only' "$err" "--mirror-only + --installer-only rejected"
+err="$("$OCP" get --mirror-only --with-mirror 4.18.10 2>&1)"
+assert_re 'mirror-only' "$err" "--mirror-only + --with-mirror rejected"
+
+echo "=== get: oc-mirror is Linux-only (mac guard, offline) ==="
+err="$(OCP_PLATFORM=mac-arm64 "$OCP" get --mirror-only 4.18.10 2>&1)"
+assert_re 'Linux-only' "$err" "mac host rejected for oc-mirror"
+
+echo "=== get/fetch via a local file:// mirror ==="
+if ! curl -fsSL "file://$OCP" -o /dev/null 2>/dev/null; then
+  echo "SKIP: this curl lacks file:// support; skipping fetch tests" >&2
+else
+  sha256f() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+
+  # Build a tarball containing an 'oc-mirror' that prints a marker, so tests can
+  # tell which variant/tree was installed by running the installed binary.
+  mk_mirror_tar() {  # <out-tar> <marker>
+    local out="$1" marker="$2" b="$TESTDIR/build"
+    rm -rf "$b"; mkdir -p "$b"
+    printf '#!/bin/sh\necho %s\n' "$marker" > "$b/oc-mirror"; chmod +x "$b/oc-mirror"
+    ( cd "$b" && tar -czf "$out" oc-mirror )
+  }
+
+  MIR="$TESTDIR/mirror"
+  X="$MIR/x86_64/clients/ocp/4.18.10"; A="$MIR/arm64/clients/ocp/4.18.10"
+  P="$MIR/x86_64/clients/ocp/4.17.0"   # a version with only the plain build
+  mkdir -p "$X" "$A" "$P"
+
+  for d in "$X" "$A" "$P"; do printf 'Name: %s\n' "${d##*/}" > "$d/release.txt"; done
+
+  mk_mirror_tar "$X/oc-mirror.tar.gz"       "rhel8-x86"
+  mk_mirror_tar "$X/oc-mirror.rhel9.tar.gz" "rhel9-x86"
+  mk_mirror_tar "$A/oc-mirror.tar.gz"       "rhel8-arm"
+  mk_mirror_tar "$A/oc-mirror.rhel9.tar.gz" "rhel9-arm"
+  mk_mirror_tar "$P/oc-mirror.tar.gz"       "rhel8-only"
+  ( cd "$X" && sha256f oc-mirror.tar.gz oc-mirror.rhel9.tar.gz > sha256sum.txt )
+  ( cd "$A" && sha256f oc-mirror.tar.gz oc-mirror.rhel9.tar.gz > sha256sum.txt )
+  ( cd "$P" && sha256f oc-mirror.tar.gz                        > sha256sum.txt )
+
+  export OCP_BASE_URL="file://$MIR/x86_64/clients/ocp"
+  export OCP_BIN_DIR="$TESTDIR/fetch-dir"; mkdir -p "$OCP_BIN_DIR"
+
+  echo "--- prefers the rhel9 build ---"
+  OCP_PLATFORM=linux "$OCP" get --mirror-only 4.18.10 >/dev/null 2>&1
+  assert_eq "rhel9-x86" "$("$OCP_BIN_DIR/oc-mirror-4.18.10" 2>&1)" "installs the rhel9 build by default"
+
+  echo "--- --rhel8 forces the plain build ---"
+  "$OCP" remove 4.18.10 >/dev/null 2>&1
+  OCP_PLATFORM=linux "$OCP" get --mirror-only --rhel8 4.18.10 >/dev/null 2>&1
+  assert_eq "rhel8-x86" "$("$OCP_BIN_DIR/oc-mirror-4.18.10" 2>&1)" "--rhel8 installs the plain build"
+
+  echo "--- falls back to the plain build when no rhel9 exists ---"
+  OCP_PLATFORM=linux "$OCP" get --mirror-only 4.17.0 >/dev/null 2>&1
+  assert_eq "rhel8-only" "$("$OCP_BIN_DIR/oc-mirror-4.17.0" 2>&1)" "falls back to the plain build"
+
+  echo "--- arm64 pulls from the arm64 tree ---"
+  "$OCP" remove 4.18.10 >/dev/null 2>&1
+  OCP_PLATFORM=linux-arm64 "$OCP" get --mirror-only 4.18.10 >/dev/null 2>&1
+  assert_eq "rhel9-arm" "$("$OCP_BIN_DIR/oc-mirror-4.18.10" 2>&1)" "arm64 fetch hits the arm64 tree"
+
+  echo "--- OCP_WITH_MIRROR opts oc-mirror into a default get ---"
+  "$OCP" remove 4.18.10 >/dev/null 2>&1
+  OCP_PLATFORM=linux OCP_WITH_MIRROR=1 "$OCP" get --mirror-only 4.18.10 >/dev/null 2>&1
+  [ -x "$OCP_BIN_DIR/oc-mirror-4.18.10" ] && ok "OCP_WITH_MIRROR fetched oc-mirror" || bad "OCP_WITH_MIRROR did not fetch oc-mirror"
+
+  echo "--- already-installed is a no-op ---"
+  out="$(OCP_PLATFORM=linux "$OCP" get --mirror-only 4.18.10 2>&1)"
+  assert_re 'already installed' "$out" "re-get of present oc-mirror is a no-op"
+fi
+
 finish
