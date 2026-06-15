@@ -36,6 +36,13 @@ UPDATE_URL="${OCP_UPDATE_URL:-https://raw.githubusercontent.com/lmcclint/ocp-ver
 # These versioned names are listed in sha256sum.txt for both exact-version and
 # channel directories, whereas the generic names are not present in exact dirs.
 
+# Components ocp manages. The first three are "core": always expected, and
+# 'use' warns + unsets the bare link when one is missing. oc-mirror is optional
+# (Linux-only, opt-in): linked when present, silently skipped when absent.
+CORE_COMPONENTS=(openshift-install oc kubectl)
+OPTIONAL_COMPONENTS=(oc-mirror)
+ALL_COMPONENTS=("${CORE_COMPONENTS[@]}" "${OPTIONAL_COMPONENTS[@]}")
+
 # ---- helpers ---------------------------------------------------------------
 
 err()  { printf 'error: %s\n' "$*" >&2; }
@@ -101,10 +108,13 @@ usage() {
 ocp - OpenShift installer/client version manager
 
 Usage:
-  ocp get [--cli-only|--installer-only] [--use] <version|channel>
+  ocp get [--cli-only|--installer-only|--mirror-only|--with-mirror] [--rhel8] [--use] <version|channel>
                               Download, verify and install a version.
                               --cli-only       only oc + kubectl
                               --installer-only only openshift-install
+                              --mirror-only    only oc-mirror (Linux only)
+                              --with-mirror    also fetch oc-mirror
+                              --rhel8          oc-mirror: force the RHEL8 build
                               --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
   ocp list                    List installed versions (* = active)
@@ -131,6 +141,7 @@ Environment:
   OCP_PLATFORM   force platform: linux | linux-arm64 | mac | mac-arm64
                  (default: auto-detected from uname)
   OCP_INSECURE   set to 1 to continue past a checksum mismatch
+  OCP_WITH_MIRROR set to 1 to always include oc-mirror in a default 'get'
   OCP_BASE_URL   mirror clients dir (default: the cross-platform x86_64 tree,
                  which also serves the arm64 + mac binaries)
   OCP_UPDATE_URL source URL for 'ocp update' (default: GitHub raw, main)
@@ -162,38 +173,109 @@ verify_checksum() {
   fi
 }
 
+# Download + verify + install oc-mirror for a version. oc-mirror's tarball is
+# neither version- nor platform-qualified (always oc-mirror[.rhel9].tar.gz,
+# extracting a single 'oc-mirror' binary), is Linux-only, and on arm64 is served
+# from a separate mirror tree -- so it gets its own fetch routine.
+# Args: <ref> <version> <platform> <force_rhel8>
+fetch_oc_mirror() {
+  local ref="$1" version="$2" platform="$3" force_rhel8="$4"
+  local mirror_url="$BASE_URL" sumfile tarball
+
+  # arm64 oc-mirror lives in the arm64 client tree, not the x86_64 one. If a
+  # custom OCP_BASE_URL has no '/x86_64/' segment this is a no-op (documented).
+  if [ "$platform" = "linux-arm64" ]; then
+    mirror_url="$(printf '%s\n' "$BASE_URL" | sed 's#/x86_64/#/arm64/#')"
+  fi
+
+  [ -n "$WORKDIR" ] || WORKDIR="$(mktemp -d)"
+  sumfile="$WORKDIR/oc-mirror-sha256sum.txt"
+
+  info "Downloading oc-mirror sha256sum.txt ..."
+  curl -fsSL "$mirror_url/$ref/sha256sum.txt" -o "$sumfile" \
+    || die "failed to download oc-mirror sha256sum.txt from $mirror_url/$ref/"
+
+  # Prefer the RHEL9 build (what oc-mirror v2 wants) when present; fall back to
+  # the plain (RHEL8) build. --rhel8 forces the plain build.
+  if [ "$force_rhel8" != 1 ] && grep -qE '[[:space:]]oc-mirror\.rhel9\.tar\.gz$' "$sumfile"; then
+    tarball="oc-mirror.rhel9.tar.gz"
+  else
+    tarball="oc-mirror.tar.gz"
+  fi
+
+  info "Downloading $tarball ..."
+  curl -fSL --progress-bar "$mirror_url/$ref/$tarball" -o "$WORKDIR/$tarball" \
+    || die "failed to download $tarball"
+
+  info "Verifying checksum ..."
+  if ! verify_checksum "$sumfile" "$tarball" "$WORKDIR/$tarball"; then
+    if [ "${OCP_INSECURE:-}" = "1" ]; then
+      info "  OCP_INSECURE=1 set; continuing despite mismatch."
+    else
+      die "checksum verification failed for $tarball (set OCP_INSECURE=1 to override)"
+    fi
+  fi
+
+  tar -xzf "$WORKDIR/$tarball" -C "$WORKDIR" oc-mirror
+  install -m 0755 "$WORKDIR/oc-mirror" "$BIN_DIR/oc-mirror-$version"
+  info "Installed: $BIN_DIR/oc-mirror-$version"
+}
+
 # ---- subcommands -----------------------------------------------------------
 
 cmd_get() {
   # "cli" = the client tarball (oc + kubectl); "installer" = openshift-install.
   local ref="" want_cli=1 want_installer=1 do_use=0
+  # oc-mirror is opt-in: via --with-mirror/--mirror-only, or OCP_WITH_MIRROR=1.
+  local want_mirror=0 mirror_only=0 with_mirror=0 force_rhel8=0
+  [ -n "${OCP_WITH_MIRROR:-}" ] && want_mirror=1
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --cli-only)       want_installer=0 ;;
       --installer-only) want_cli=0 ;;
+      --with-mirror)    with_mirror=1; want_mirror=1 ;;
+      --mirror-only)    mirror_only=1 ;;
+      --rhel8)          force_rhel8=1 ;;
       --use)            do_use=1 ;;
       -*) die "unknown flag: $1 (see 'ocp --help')" ;;
       *)  [ -z "$ref" ] || die "unexpected argument: $1"; ref="$1" ;;
     esac
     shift
   done
-  [ -n "$ref" ] || die "usage: ocp get [--cli-only|--installer-only] <version|channel>"
-  [ "$want_cli" = 1 ] || [ "$want_installer" = 1 ] \
+  [ -n "$ref" ] || die "usage: ocp get [--cli-only|--installer-only|--mirror-only|--with-mirror] <version|channel>"
+
+  if [ "$mirror_only" = 1 ]; then
+    if [ "$want_cli" = 0 ] || [ "$want_installer" = 0 ] || [ "$with_mirror" = 1 ]; then
+      die "--mirror-only cannot be combined with --cli-only, --installer-only, or --with-mirror"
+    fi
+    want_installer=0; want_cli=0; want_mirror=1
+  fi
+  [ "$want_installer" = 1 ] || [ "$want_cli" = 1 ] || [ "$want_mirror" = 1 ] \
     || die "--cli-only and --installer-only are mutually exclusive"
   require curl; require tar
 
   local platform version
   platform="$(detect_platform)"
+
+  # Fail fast (before any network) if oc-mirror is wanted on an unsupported host.
+  if [ "$want_mirror" = 1 ]; then
+    case "$platform" in
+      linux|linux-arm64) ;;
+      *) die "oc-mirror is Linux-only (no $platform build); drop --with-mirror/--mirror-only on this host" ;;
+    esac
+  fi
+
   version="$(resolve_version "$ref")"
   info "Resolved '$ref' -> $version ($platform)"
 
   # Only fetch components that are both requested and not already installed,
   # so a repeated 'get' (or one that completes a partial install) skips work.
-  local need_installer=0 need_client=0
+  local need_installer=0 need_client=0 need_mirror=0
   [ "$want_installer" = 1 ] && [ ! -x "$BIN_DIR/openshift-install-$version" ] && need_installer=1
   [ "$want_cli" = 1 ]       && [ ! -x "$BIN_DIR/oc-$version" ]                && need_client=1
+  [ "$want_mirror" = 1 ]    && [ ! -x "$BIN_DIR/oc-mirror-$version" ]         && need_mirror=1
 
-  if [ "$need_installer" = 0 ] && [ "$need_client" = 0 ]; then
+  if [ "$need_installer" = 0 ] && [ "$need_client" = 0 ] && [ "$need_mirror" = 0 ]; then
     info "$version already installed (requested components present)"
     if [ "$do_use" = 1 ]; then cmd_use "$version"; else check_path; fi
     return 0
@@ -202,7 +284,7 @@ cmd_get() {
   local install_tarball="openshift-install-$platform-$version.tar.gz"
   local client_tarball="openshift-client-$platform-$version.tar.gz"
 
-  # Tarballs to fetch this run (never empty: we returned early if nothing needed).
+  # Core tarballs to fetch this run (may be empty for a --mirror-only get).
   local tarballs=()
   [ "$need_installer" = 1 ] && tarballs+=("$install_tarball")
   [ "$need_client" = 1 ]    && tarballs+=("$client_tarball")
@@ -210,47 +292,55 @@ cmd_get() {
   local tmp
   WORKDIR="$(mktemp -d)"
   tmp="$WORKDIR"
-
-  info "Downloading sha256sum.txt ..."
-  curl -fsSL "$BASE_URL/$ref/sha256sum.txt" -o "$tmp/sha256sum.txt" \
-    || die "failed to download sha256sum.txt"
-
-  local t
-  for t in "${tarballs[@]}"; do
-    info "Downloading $t ..."
-    curl -fSL --progress-bar "$BASE_URL/$ref/$t" -o "$tmp/$t" \
-      || die "failed to download $t"
-  done
-
-  info "Verifying checksums ..."
-  for t in "${tarballs[@]}"; do
-    if ! verify_checksum "$tmp/sha256sum.txt" "$t" "$tmp/$t"; then
-      if [ "$platform" = "mac-arm64" ]; then
-        info "  note: Apple Silicon binaries are re-signed/notarized after the mirror"
-        info "  publishes sha256sum.txt, so this mismatch is expected upstream; continuing."
-      elif [ "${OCP_INSECURE:-}" = "1" ]; then
-        info "  OCP_INSECURE=1 set; continuing despite mismatch."
-      else
-        die "checksum verification failed for $t (set OCP_INSECURE=1 to override)"
-      fi
-    fi
-  done
-
-  info "Extracting ..."
   mkdir -p "$BIN_DIR"
-  info "Installed:"
-  if [ "$need_installer" = 1 ]; then
-    tar -xzf "$tmp/$install_tarball" -C "$tmp" openshift-install
-    install -m 0755 "$tmp/openshift-install" "$BIN_DIR/openshift-install-$version"
-    info "  $BIN_DIR/openshift-install-$version"
+
+  # --- core components (installer + client), served from the x86_64 tree ------
+  if [ "${#tarballs[@]}" -gt 0 ]; then
+    info "Downloading sha256sum.txt ..."
+    curl -fsSL "$BASE_URL/$ref/sha256sum.txt" -o "$tmp/sha256sum.txt" \
+      || die "failed to download sha256sum.txt"
+
+    local t
+    for t in "${tarballs[@]}"; do
+      info "Downloading $t ..."
+      curl -fSL --progress-bar "$BASE_URL/$ref/$t" -o "$tmp/$t" \
+        || die "failed to download $t"
+    done
+
+    info "Verifying checksums ..."
+    for t in "${tarballs[@]}"; do
+      if ! verify_checksum "$tmp/sha256sum.txt" "$t" "$tmp/$t"; then
+        if [ "$platform" = "mac-arm64" ]; then
+          info "  note: Apple Silicon binaries are re-signed/notarized after the mirror"
+          info "  publishes sha256sum.txt, so this mismatch is expected upstream; continuing."
+        elif [ "${OCP_INSECURE:-}" = "1" ]; then
+          info "  OCP_INSECURE=1 set; continuing despite mismatch."
+        else
+          die "checksum verification failed for $t (set OCP_INSECURE=1 to override)"
+        fi
+      fi
+    done
+
+    info "Extracting ..."
+    if [ "$need_installer" = 1 ]; then
+      tar -xzf "$tmp/$install_tarball" -C "$tmp" openshift-install
+      install -m 0755 "$tmp/openshift-install" "$BIN_DIR/openshift-install-$version"
+      info "Installed: $BIN_DIR/openshift-install-$version"
+    fi
+    if [ "$need_client" = 1 ]; then
+      tar -xzf "$tmp/$client_tarball" -C "$tmp" oc kubectl
+      install -m 0755 "$tmp/oc"      "$BIN_DIR/oc-$version"
+      install -m 0755 "$tmp/kubectl" "$BIN_DIR/kubectl-$version"
+      info "Installed: $BIN_DIR/oc-$version"
+      info "Installed: $BIN_DIR/kubectl-$version"
+    fi
   fi
-  if [ "$need_client" = 1 ]; then
-    tar -xzf "$tmp/$client_tarball" -C "$tmp" oc kubectl
-    install -m 0755 "$tmp/oc"      "$BIN_DIR/oc-$version"
-    install -m 0755 "$tmp/kubectl" "$BIN_DIR/kubectl-$version"
-    info "  $BIN_DIR/oc-$version"
-    info "  $BIN_DIR/kubectl-$version"
+
+  # --- oc-mirror (separate tree/naming/variants) -----------------------------
+  if [ "$need_mirror" = 1 ]; then
+    fetch_oc_mirror "$ref" "$version" "$platform" "$force_rhel8"
   fi
+
   if [ "$do_use" = 1 ]; then
     cmd_use "$version"
   else
@@ -263,7 +353,7 @@ cmd_get() {
 # Falls back oc/kubectl so a cli-only active version is still detected.
 active_version() {
   local bare link target
-  for bare in openshift-install oc kubectl; do
+  for bare in "${ALL_COMPONENTS[@]}"; do
     link="$BIN_DIR/$bare"
     [ -L "$link" ] || continue
     target="$(readlink "$link")"
@@ -279,6 +369,7 @@ installed_components() {
   [ -x "$BIN_DIR/openshift-install-$version" ] && present="${present:+$present, }installer"
   [ -x "$BIN_DIR/oc-$version" ]                && present="${present:+$present, }oc"
   [ -x "$BIN_DIR/kubectl-$version" ]           && present="${present:+$present, }kubectl"
+  [ -x "$BIN_DIR/oc-mirror-$version" ]         && present="${present:+$present, }oc-mirror"
   printf '%s' "$present"
 }
 
@@ -288,20 +379,27 @@ cmd_use() {
 
   # Tolerate partial installs: require at least one component, not all three.
   local bare any=0
-  for bare in openshift-install oc kubectl; do
+  for bare in "${ALL_COMPONENTS[@]}"; do
     [ -x "$BIN_DIR/$bare-$version" ] && any=1
   done
   [ "$any" = 1 ] || die "$version not installed; run 'ocp get $version' first"
 
   # Relative links, contained to a subshell so the cd doesn't leak.
   ( cd "$BIN_DIR" || die "cannot cd to $BIN_DIR"
-    for bare in openshift-install oc kubectl; do
+    for bare in "${CORE_COMPONENTS[@]}"; do
       rm -f "$bare"   # portable replace (BSD ln lacks -n)
       if [ -x "$bare-$version" ]; then
         ln -s "$bare-$version" "$bare"
       else
         info "warning: $bare not installed for $version; '$bare' unset"
       fi
+    done
+    # Optional components: link when present, silently clear otherwise so the
+    # bare link never dangles to a different version (no warning -- most users
+    # never install these).
+    for bare in "${OPTIONAL_COMPONENTS[@]}"; do
+      rm -f "$bare"
+      if [ -x "$bare-$version" ]; then ln -s "$bare-$version" "$bare"; fi
     done )
   info "Now using OCP $version"
   check_path
@@ -316,9 +414,11 @@ cmd_list() {
   # the real files too, for the total-size summary.
   shopt -s nullglob
   local versions=() files=()
-  for comp in openshift-install oc kubectl; do
+  for comp in "${ALL_COMPONENTS[@]}"; do
     for f in "$BIN_DIR/$comp"-*; do
       [ -L "$f" ] && continue   # skip the bare symlink if it matched
+      # 'oc-*' also matches 'oc-mirror-*'; oc-mirror is gathered on its own pass.
+      [ "$comp" = oc ] && case "${f##*/}" in oc-mirror-*) continue ;; esac
       versions+=("${f##*/$comp-}")
       files+=("$f")
     done
@@ -438,7 +538,7 @@ cmd_remove() {
     info "warning: $version is the active version; symlinks will dangle until you 'ocp use' another"
   fi
 
-  for bare in openshift-install oc kubectl; do
+  for bare in "${ALL_COMPONENTS[@]}"; do
     if [ -e "$BIN_DIR/$bare-$version" ]; then
       rm -f "$BIN_DIR/$bare-$version"
       removed=1

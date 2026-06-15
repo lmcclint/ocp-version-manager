@@ -25,6 +25,8 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc
 ocp get <version|channel>   # download, verify (sha256) and install a version
 ocp get --cli-only <ver>    # only the client (oc + kubectl)
 ocp get --installer-only <ver>  # only openshift-install
+ocp get --mirror-only <ver> # only oc-mirror (Linux only)
+ocp get --with-mirror <ver> # the default two, plus oc-mirror
 ocp get --use <ver>         # install, then activate it (runs 'use')
 ocp use <version>           # activate a version (swap openshift-install/oc/kubectl)
 ocp list                    # list installed versions (* = active, with components + total size)
@@ -86,6 +88,22 @@ channel (`stable-4.15`, `latest-4.16`, `candidate-4.17`, `fast-4.14`, ...).
 Channels are resolved to a concrete version via the mirror's `release.txt`,
 so binaries are always named with the real version number.
 
+### oc-mirror
+
+`oc-mirror` is managed as an optional fourth component. It's opt-in because the
+mirror only ships it for **Linux** (x86_64 and arm64 — there is no macOS build).
+Fetch it alongside a normal `get` with `--with-mirror`, on its own with
+`--mirror-only`, or always-on by exporting `OCP_WITH_MIRROR=1`. Once installed
+it behaves like the others: `ocp use` links the bare `oc-mirror`, and `ocp list`
+/ `ocp remove` include it.
+
+From 4.16 the mirror publishes two builds — `oc-mirror.tar.gz` (RHEL8) and
+`oc-mirror.rhel9.tar.gz` (RHEL9, which oc-mirror v2 expects). `ocp` installs the
+RHEL9 build when it's available and falls back to the plain build otherwise; use
+`--rhel8` to force the plain build. (To switch an already-installed version's
+build, `ocp remove <ver>` first.) On arm64 hosts the binary is pulled from the
+mirror's `arm64/` client tree automatically.
+
 ## Platforms
 
 The platform is auto-detected from `uname` (OS + arch):
@@ -114,6 +132,7 @@ tree — the `linux-arm64`, `mac`, and `mac-arm64` tarballs all live there too
 | `OCP_BIN_DIR` | Install directory (default `~/.local/bin`) |
 | `OCP_PLATFORM` | Override the detected platform |
 | `OCP_INSECURE` | Set to `1` to continue past a checksum mismatch |
+| `OCP_WITH_MIRROR` | Set to `1` to always include oc-mirror in a default `get` |
 | `OCP_BASE_URL` | Mirror clients directory (default: the cross-platform `x86_64` tree) |
 | `OCP_UPDATE_URL` | Source URL for `ocp update` (default: GitHub raw, `main`) |
 
