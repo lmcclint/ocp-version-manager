@@ -37,6 +37,10 @@ full user-facing docs.
 - Always bump the patch version on every commit that changes behavior, even small fixes. Users may `ocp update` between any two pushes.
 - `ocp update` only swaps the script in if the fetched `VERSION` differs, so a
   commit that forgets to bump is a silent no-op for everyone who already ran it.
+- Every behavior change bumps `VERSION` **and** prepends a matching `## X.Y.Z`
+  section to `CHANGELOG.md` in the same commit. `ocp update` parses those
+  headers to show release notes, so the header format (`## X.Y.Z`, no `v`) is a
+  contract — keep it exact.
 
 ## Development Rules
 
@@ -46,6 +50,7 @@ full user-facing docs.
 - Commit style: `ocp: lowercase description` (see git log for examples)
 - Keep `README.md` env var table, usage block, and examples in sync with the script's `usage()` and actual behavior
 - Opt-in features use the pattern: `--with-<thing>` flag + `OCP_WITH_<THING>=1` env var
+- When bumping `VERSION`, add the matching `CHANGELOG.md` entry (newest first)
 
 ## Architecture
 

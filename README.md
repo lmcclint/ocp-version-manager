@@ -43,6 +43,10 @@ the project's `main` branch (set `OCP_UPDATE_URL` to point elsewhere, e.g. a
 fork). It downloads to a temp file, syntax-checks it, and only swaps it in if
 the version differs — so a bad download can't brick the tool.
 
+After a successful update it prints the `CHANGELOG.md` entries for every version
+between your old copy and the new one (set `OCP_CHANGELOG_URL` to point
+elsewhere). If the changelog can't be fetched the update still proceeds.
+
 By default `get` downloads only the CLI (`oc` + `kubectl`). The installer and
 oc-mirror are opt-in — add `--with-installer` or `--with-mirror` to include
 them, or set the corresponding env var (`OCP_WITH_INSTALLER=1`,
@@ -140,6 +144,7 @@ tree — the `linux-arm64`, `mac`, and `mac-arm64` tarballs all live there too
 | `OCP_WITH_MIRROR` | Set to `1` to always include oc-mirror in a default `get` |
 | `OCP_BASE_URL` | Mirror clients directory (default: the cross-platform `x86_64` tree) |
 | `OCP_UPDATE_URL` | Source URL for `ocp update` (default: GitHub raw, `main`) |
+| `OCP_CHANGELOG_URL` | Source URL for release notes shown by `ocp update` (default: `CHANGELOG.md` alongside `OCP_UPDATE_URL`) |
 
 ## Checksums & Apple Silicon
 
