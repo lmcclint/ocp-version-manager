@@ -236,7 +236,7 @@ cmd_get() {
   [ "${OCP_WITH_MIRROR:-}" = 1 ]    && want_mirror=1
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --cli-only)       flag_cli_only=1; want_installer=0 ;;
+      --cli-only)       flag_cli_only=1; want_installer=0; want_mirror=0 ;;
       --installer-only) flag_installer_only=1; want_cli=0; want_installer=1 ;;
       --with-installer) with_installer=1; want_installer=1 ;;
       --with-mirror)    with_mirror=1; want_mirror=1 ;;
