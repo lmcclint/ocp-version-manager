@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.3.2"
+VERSION="0.4.0"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
