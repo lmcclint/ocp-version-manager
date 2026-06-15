@@ -123,18 +123,24 @@ else
   OCP_PLATFORM=linux-arm64 "$OCP" get --mirror-only 4.18.10 >/dev/null 2>&1
   assert_eq "rhel9-arm" "$("$OCP_BIN_DIR/oc-mirror-4.18.10" 2>&1)" "arm64 fetch hits the arm64 tree"
 
-  echo "--- a bare get installs only core (no oc-mirror) ---"
+  echo "--- a bare get installs only CLI (no installer, no oc-mirror) ---"
   "$OCP" remove 4.18.10 >/dev/null 2>&1
   OCP_PLATFORM=linux "$OCP" get 4.18.10 >/dev/null 2>&1
-  [ -x "$OCP_BIN_DIR/openshift-install-4.18.10" ] && ok "bare get installed installer" || bad "bare get missing installer"
-  [ -x "$OCP_BIN_DIR/oc-4.18.10" ]                && ok "bare get installed oc"        || bad "bare get missing oc"
+  [ -x "$OCP_BIN_DIR/oc-4.18.10" ]                && ok "bare get installed oc"           || bad "bare get missing oc"
+  [ -e "$OCP_BIN_DIR/openshift-install-4.18.10" ] && bad "bare get should not fetch installer" || ok "bare get skips installer"
   [ -e "$OCP_BIN_DIR/oc-mirror-4.18.10" ] && bad "bare get should not fetch oc-mirror" || ok "bare get skips oc-mirror"
+
+  echo "--- OCP_WITH_INSTALLER=1 adds installer to a bare get ---"
+  "$OCP" remove 4.18.10 >/dev/null 2>&1
+  OCP_PLATFORM=linux OCP_WITH_INSTALLER=1 "$OCP" get 4.18.10 >/dev/null 2>&1
+  [ -x "$OCP_BIN_DIR/openshift-install-4.18.10" ] && ok "OCP_WITH_INSTALLER fetched installer" || bad "OCP_WITH_INSTALLER did not fetch installer"
+  [ -x "$OCP_BIN_DIR/oc-4.18.10" ]                && ok "CLI still installed alongside installer" || bad "CLI missing"
 
   echo "--- OCP_WITH_MIRROR=1 adds oc-mirror to a bare get ---"
   "$OCP" remove 4.18.10 >/dev/null 2>&1
   OCP_PLATFORM=linux OCP_WITH_MIRROR=1 "$OCP" get 4.18.10 >/dev/null 2>&1
   [ -x "$OCP_BIN_DIR/oc-mirror-4.18.10" ] && ok "OCP_WITH_MIRROR fetched oc-mirror on a bare get" || bad "OCP_WITH_MIRROR did not fetch oc-mirror"
-  [ -x "$OCP_BIN_DIR/openshift-install-4.18.10" ] && ok "core still installed alongside oc-mirror" || bad "core missing"
+  [ -x "$OCP_BIN_DIR/oc-4.18.10" ]        && ok "CLI still installed alongside oc-mirror" || bad "CLI missing"
 
   echo "--- already-installed is a no-op ---"
   out="$(OCP_PLATFORM=linux "$OCP" get --mirror-only 4.18.10 2>&1)"

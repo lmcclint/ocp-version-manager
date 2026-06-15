@@ -1,11 +1,12 @@
 # ocp
 
 A tiny Bash tool to install and switch between multiple OpenShift versions.
-It downloads `openshift-install`, `oc`, and `kubectl` from the public mirror
+It downloads `oc` and `kubectl` from the public mirror
 (<https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/>) into
 `~/.local/bin`, naming each binary with its version so versions coexist. A
-`use` command swaps the bare-named symlinks (`openshift-install`, `oc`,
-`kubectl`) to point at whichever version you want active.
+`use` command swaps the bare-named symlinks to point at whichever version you
+want active. The installer (`openshift-install`) and `oc-mirror` are opt-in
+via flags or environment variables.
 
 ## Install
 
@@ -22,19 +23,19 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc
 ## Usage
 
 ```sh
-ocp get <version|channel>   # download, verify (sha256) and install a version
-ocp get --cli-only <ver>    # only the client (oc + kubectl)
+ocp get <version|channel>       # download CLI (oc + kubectl) only
+ocp get --with-installer <ver>  # also fetch openshift-install
+ocp get --with-mirror <ver>     # also fetch oc-mirror (Linux only)
 ocp get --installer-only <ver>  # only openshift-install
-ocp get --mirror-only <ver> # only oc-mirror (Linux only)
-ocp get --with-mirror <ver> # the default two, plus oc-mirror
-ocp get --use <ver>         # install, then activate it (runs 'use')
-ocp use <version>           # activate a version (swap openshift-install/oc/kubectl)
-ocp list                    # list installed versions (* = active, with components + total size)
-ocp list-versions [X.Y|chan]  # list versions on the mirror (e.g. 4.20, stable-4.20)
-ocp list-channels <X.Y>     # list a minor's channels + the version each points to
-ocp remove <version>        # remove an installed version's binaries
-ocp update                  # update ocp itself to the latest version
-ocp --version               # print the ocp version
+ocp get --mirror-only <ver>     # only oc-mirror (Linux only)
+ocp get --use <ver>             # install, then activate it (runs 'use')
+ocp use <version>               # activate a version (swap symlinks)
+ocp list                        # list installed versions (* = active, with components + total size)
+ocp list-versions [X.Y|chan]    # list versions on the mirror (e.g. 4.20, stable-4.20)
+ocp list-channels <X.Y>        # list a minor's channels + the version each points to
+ocp remove <version>            # remove an installed version's binaries
+ocp update                      # update ocp itself to the latest version
+ocp --version                   # print the ocp version
 ```
 
 `ocp update` replaces the running script in place with the latest copy from
@@ -42,15 +43,17 @@ the project's `main` branch (set `OCP_UPDATE_URL` to point elsewhere, e.g. a
 fork). It downloads to a temp file, syntax-checks it, and only swaps it in if
 the version differs — so a bad download can't brick the tool.
 
-By default `get` downloads all three binaries. `--cli-only` and
-`--installer-only` (mutually exclusive) fetch just one component, and a `get`
-only downloads what's missing — so running `ocp get 4.14.1` after an earlier
-`ocp get --cli-only 4.14.1` just adds the installer. Add `--use` to activate
-the version right after installing (it also activates if everything was
-already present). When a version has only
-some components installed, `ocp use` links the ones present and unsets the bare
-symlink for any that are missing (warning as it does so), and `ocp list`
-annotates each version with the components it has.
+By default `get` downloads only the CLI (`oc` + `kubectl`). The installer and
+oc-mirror are opt-in — add `--with-installer` or `--with-mirror` to include
+them, or set the corresponding env var (`OCP_WITH_INSTALLER=1`,
+`OCP_WITH_MIRROR=1`) to make it permanent. `--cli-only` and `--installer-only`
+(mutually exclusive) fetch just one component, and a `get` only downloads
+what's missing — so running `ocp get --with-installer 4.14.1` after an earlier
+`ocp get 4.14.1` just adds the installer. Add `--use` to activate the version
+right after installing. When a version has only some components installed,
+`ocp use` links the ones present and unsets the bare symlink for any that are
+missing (warning as it does so), and `ocp list` annotates each version with
+the components it has.
 
 `ocp list-versions` lists the concrete versions on the mirror, optionally
 filtered by an `X.Y` (or a channel like `stable-4.20`, which is reduced to its
@@ -75,11 +78,12 @@ stable-4.20      4.20.24  (installed: installer, oc, kubectl)
 ### Examples
 
 ```sh
-ocp get 4.14.1              # exact version
-ocp get stable-4.15         # channel — resolves to the concrete version
-ocp list-versions 4.14      # all 4.14.z available on the mirror
-ocp list-channels 4.14      # 4.14 channels and the version each points to
-ocp use 4.14.1              # openshift-install/oc/kubectl now point at 4.14.1
+ocp get 4.14.1                     # CLI only (oc + kubectl)
+ocp get --with-installer 4.14.1    # CLI + installer
+ocp get stable-4.15                # channel — resolves to the concrete version
+ocp list-versions 4.14             # all 4.14.z available on the mirror
+ocp list-channels 4.14             # 4.14 channels and the version each points to
+ocp use 4.14.1                     # oc/kubectl now point at 4.14.1
 ocp list
 ```
 
@@ -132,6 +136,7 @@ tree — the `linux-arm64`, `mac`, and `mac-arm64` tarballs all live there too
 | `OCP_BIN_DIR` | Install directory (default `~/.local/bin`) |
 | `OCP_PLATFORM` | Override the detected platform |
 | `OCP_INSECURE` | Set to `1` to continue past a checksum mismatch |
+| `OCP_WITH_INSTALLER` | Set to `1` to always include the installer in a default `get` |
 | `OCP_WITH_MIRROR` | Set to `1` to always include oc-mirror in a default `get` |
 | `OCP_BASE_URL` | Mirror clients directory (default: the cross-platform `x86_64` tree) |
 | `OCP_UPDATE_URL` | Source URL for `ocp update` (default: GitHub raw, `main`) |

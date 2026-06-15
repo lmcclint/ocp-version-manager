@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.4.0"
+VERSION="0.5.0"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -108,12 +108,14 @@ usage() {
 ocp - OpenShift installer/client version manager
 
 Usage:
-  ocp get [--cli-only|--installer-only|--mirror-only|--with-mirror] [--rhel8] [--use] <version|channel>
+  ocp get [flags] [--use] <version|channel>
                               Download, verify and install a version.
-                              --cli-only       only oc + kubectl
+                              By default, only fetches the CLI (oc + kubectl).
+                              --with-installer also fetch openshift-install
+                              --with-mirror    also fetch oc-mirror (Linux only)
+                              --cli-only       only oc + kubectl (default)
                               --installer-only only openshift-install
                               --mirror-only    only oc-mirror (Linux only)
-                              --with-mirror    also fetch oc-mirror
                               --rhel8          oc-mirror: force the RHEL8 build
                               --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
@@ -127,7 +129,7 @@ Usage:
 Examples:
   ocp get 4.14.1
   ocp get stable-4.15
-  ocp get --cli-only 4.14.1
+  ocp get --with-installer 4.14.1
   ocp get --installer-only stable-4.15
   ocp get --use 4.14.1
   ocp use 4.14.1
@@ -141,6 +143,7 @@ Environment:
   OCP_PLATFORM   force platform: linux | linux-arm64 | mac | mac-arm64
                  (default: auto-detected from uname)
   OCP_INSECURE   set to 1 to continue past a checksum mismatch
+  OCP_WITH_INSTALLER set to 1 to always include the installer in a default 'get'
   OCP_WITH_MIRROR set to 1 to always include oc-mirror in a default 'get'
   OCP_BASE_URL   mirror clients dir (default: the cross-platform x86_64 tree,
                  which also serves the arm64 + mac binaries)
@@ -225,14 +228,17 @@ fetch_oc_mirror() {
 
 cmd_get() {
   # "cli" = the client tarball (oc + kubectl); "installer" = openshift-install.
-  local ref="" want_cli=1 want_installer=1 do_use=0
-  # oc-mirror is opt-in: via --with-mirror/--mirror-only, or OCP_WITH_MIRROR=1.
-  local want_mirror=0 mirror_only=0 with_mirror=0 force_rhel8=0
-  [ -n "${OCP_WITH_MIRROR:-}" ] && want_mirror=1
+  # Default: CLI only. Installer and oc-mirror are opt-in via flags or env vars.
+  local ref="" want_cli=1 want_installer=0 do_use=0
+  local want_mirror=0 mirror_only=0 with_mirror=0 with_installer=0 force_rhel8=0
+  local flag_cli_only=0 flag_installer_only=0
+  [ "${OCP_WITH_INSTALLER:-}" = 1 ] && want_installer=1
+  [ "${OCP_WITH_MIRROR:-}" = 1 ]    && want_mirror=1
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --cli-only)       want_installer=0 ;;
-      --installer-only) want_cli=0 ;;
+      --cli-only)       flag_cli_only=1; want_installer=0 ;;
+      --installer-only) flag_installer_only=1; want_cli=0; want_installer=1 ;;
+      --with-installer) with_installer=1; want_installer=1 ;;
       --with-mirror)    with_mirror=1; want_mirror=1 ;;
       --mirror-only)    mirror_only=1 ;;
       --rhel8)          force_rhel8=1 ;;
@@ -242,17 +248,41 @@ cmd_get() {
     esac
     shift
   done
-  [ -n "$ref" ] || die "usage: ocp get [--cli-only|--installer-only|--mirror-only|--with-mirror] <version|channel>"
+  [ -n "$ref" ] || die "usage: ocp get [--cli-only|--installer-only|--mirror-only|--with-installer|--with-mirror] <version|channel>"
+
+  if [ "$flag_cli_only" = 1 ] && [ "$flag_installer_only" = 1 ]; then
+    die "--cli-only and --installer-only are mutually exclusive"
+  fi
 
   if [ "$mirror_only" = 1 ]; then
-    if [ "$want_cli" = 0 ] || [ "$want_installer" = 0 ] || [ "$with_mirror" = 1 ]; then
+    if [ "$flag_cli_only" = 1 ] || [ "$flag_installer_only" = 1 ] || [ "$with_mirror" = 1 ]; then
       die "--mirror-only cannot be combined with --cli-only, --installer-only, or --with-mirror"
     fi
     want_installer=0; want_cli=0; want_mirror=1
   fi
   [ "$want_installer" = 1 ] || [ "$want_cli" = 1 ] || [ "$want_mirror" = 1 ] \
-    || die "--cli-only and --installer-only are mutually exclusive"
+    || die "no components selected"
   require curl; require tar
+
+  # Hint: suggest env vars when a flag was passed explicitly (not via env var).
+  if [ "$with_installer" = 1 ] && [ "${OCP_WITH_INSTALLER:-}" != 1 ]; then
+    info "hint: export OCP_WITH_INSTALLER=1 to always include the installer"
+  fi
+  if [ "$with_mirror" = 1 ] && [ "${OCP_WITH_MIRROR:-}" != 1 ]; then
+    info "hint: export OCP_WITH_MIRROR=1 to always include oc-mirror"
+  fi
+
+  # Tell the user what's being skipped in a default get (no component flags).
+  if [ "$mirror_only" = 0 ] && [ "$want_cli" = 1 ]; then
+    local skipped="" hints=""
+    if [ "$want_installer" = 0 ]; then
+      skipped="installer"; hints="--with-installer"
+    fi
+    if [ "$want_mirror" = 0 ]; then
+      skipped="${skipped:+$skipped, }oc-mirror"; hints="${hints:+$hints / }--with-mirror"
+    fi
+    [ -n "$skipped" ] && info "Skipping $skipped (use $hints to include)"
+  fi
 
   local platform version
   platform="$(detect_platform)"
