@@ -7,7 +7,7 @@
 # coexist. A 'use' command swaps the bare-named symlinks between versions.
 #
 # Subcommands:
-#   ocp get <version|channel>   Download + verify + install a version
+#   ocp get <version|channel|X.Y>  Download + verify + install a version
 #   ocp use <version>           Point openshift-install/oc/kubectl at a version
 #   ocp list                    List installed versions (* = active)
 #   ocp list-versions [X.Y]     List versions available on the mirror
@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.6.0"
+VERSION="0.7.0"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -144,8 +144,10 @@ usage() {
 ocp - OpenShift installer/client version manager
 
 Usage:
-  ocp get [flags] [--use] <version|channel>
+  ocp get [flags] [--use] <version|channel|X.Y>
                               Download, verify and install a version.
+                              A short version (e.g. 4.18) resolves via the
+                              stable channel automatically.
                               By default, only fetches the CLI (oc + kubectl).
                               --with-installer also fetch openshift-install
                               --with-mirror    also fetch oc-mirror (Linux only)
@@ -163,6 +165,7 @@ Usage:
   ocp --version               Print the ocp version
 
 Examples:
+  ocp get 4.18              (resolves to latest stable-4.18)
   ocp get 4.14.1
   ocp get stable-4.15
   ocp get --with-installer 4.14.1
@@ -286,6 +289,13 @@ cmd_get() {
     shift
   done
   [ -n "$ref" ] || die "usage: ocp get [--cli-only|--installer-only|--mirror-only|--with-installer|--with-mirror] <version|channel>"
+
+  # Short version (X.Y with no patch) -> resolve via stable channel.
+  if printf '%s\n' "$ref" | grep -qE '^[0-9]+\.[0-9]+$'; then
+    info "Short version '$ref' — resolving via stable-$ref channel"
+    info "  (use fast-$ref or candidate-$ref for other channels)"
+    ref="stable-$ref"
+  fi
 
   if [ "$flag_cli_only" = 1 ] && [ "$flag_installer_only" = 1 ]; then
     die "--cli-only and --installer-only are mutually exclusive"

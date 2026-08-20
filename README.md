@@ -23,7 +23,7 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc
 ## Usage
 
 ```sh
-ocp get <version|channel>       # download CLI (oc + kubectl) only
+ocp get <version|channel|X.Y>   # download CLI (oc + kubectl) only
 ocp get --with-installer <ver>  # also fetch openshift-install
 ocp get --with-mirror <ver>     # also fetch oc-mirror (Linux only)
 ocp get --installer-only <ver>  # only openshift-install
@@ -82,6 +82,7 @@ stable-4.20      4.20.24  (installed: installer, oc, kubectl)
 ### Examples
 
 ```sh
+ocp get 4.18                       # short version — latest stable-4.18
 ocp get 4.14.1                     # CLI only (oc + kubectl)
 ocp get --with-installer 4.14.1    # CLI + installer
 ocp get stable-4.15                # channel — resolves to the concrete version
@@ -91,10 +92,11 @@ ocp use 4.14.1                     # oc/kubectl now point at 4.14.1
 ocp list
 ```
 
-Version arguments accept either an exact version (`4.14.1`) or a mirror
-channel (`stable-4.15`, `latest-4.16`, `candidate-4.17`, `fast-4.14`, ...).
-Channels are resolved to a concrete version via the mirror's `release.txt`,
-so binaries are always named with the real version number.
+Version arguments accept an exact version (`4.14.1`), a mirror channel
+(`stable-4.15`, `latest-4.16`, `candidate-4.17`, `fast-4.14`, ...), or a
+short major.minor (`4.18`) which resolves via the `stable` channel. Channels
+are resolved to a concrete version via the mirror's `release.txt`, so
+binaries are always named with the real version number.
 
 ### oc-mirror
 
