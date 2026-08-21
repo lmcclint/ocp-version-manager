@@ -1,12 +1,12 @@
 # ocp
 
-A tiny Bash tool to install and switch between multiple OpenShift versions.
+A Bash tool that installs and switches between multiple OpenShift versions.
 It downloads `oc` and `kubectl` from the public mirror
 (<https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/>) into
-`~/.local/bin`, naming each binary with its version so versions coexist. A
-`use` command swaps the bare-named symlinks to point at whichever version you
-want active. The installer (`openshift-install`) and `oc-mirror` are opt-in
-via flags or environment variables.
+`~/.local/bin`. Each binary includes its version number in the name, so
+multiple versions coexist. The `use` command swaps bare-named symlinks to
+select the active version. The installer (`openshift-install`) and `oc-mirror`
+are opt-in with flags or environment variables.
 
 ## Install
 
@@ -14,7 +14,8 @@ via flags or environment variables.
 install -m 0755 ocp ~/.local/bin/ocp
 ```
 
-Make sure `~/.local/bin` is on your `$PATH` (the script warns if it isn't):
+Make sure that `~/.local/bin` is on your `$PATH`. If it is not, the script
+shows a warning.
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc
@@ -38,38 +39,44 @@ ocp update                      # update ocp itself to the latest version
 ocp --version                   # print the ocp version
 ```
 
-`ocp update` replaces the running script in place with the latest copy from
-the project's `main` branch (set `OCP_UPDATE_URL` to point elsewhere, e.g. a
-fork). It downloads to a temp file, syntax-checks it, and only swaps it in if
-the version differs — so a bad download can't brick the tool.
+`ocp update` replaces the current script with the latest copy from the `main`
+branch. Set `OCP_UPDATE_URL` to use a different source (for example, a fork).
+The command downloads to a temporary file and does a syntax check. If the
+version is different, it replaces the old file. A bad download cannot break the
+tool.
 
-After a successful update it prints the `CHANGELOG.md` entries for every version
-between your old copy and the new one (set `OCP_CHANGELOG_URL` to point
-elsewhere). If the changelog can't be fetched the update still proceeds.
+After a successful update, the command shows the `CHANGELOG.md` entries
+between your old version and the new one. Set `OCP_CHANGELOG_URL` to use a
+different changelog source. If the changelog cannot be fetched, the update
+still completes.
 
-By default `get` downloads only the CLI (`oc` + `kubectl`). The installer and
-oc-mirror are opt-in — add `--with-installer` or `--with-mirror` to include
-them, or set the corresponding env var (`OCP_WITH_INSTALLER=1`,
+By default, `get` downloads only the CLI (`oc` + `kubectl`). The installer and
+oc-mirror are opt-in. Add `--with-installer` or `--with-mirror` to include
+them, or set the environment variable (`OCP_WITH_INSTALLER=1`,
 `OCP_WITH_MIRROR=1`) to make it permanent. `--cli-only` and `--installer-only`
-(mutually exclusive) fetch just one component, and a `get` only downloads
-what's missing — so running `ocp get --with-installer 4.14.1` after an earlier
-`ocp get 4.14.1` just adds the installer. Add `--use` to activate the version
-right after installing. When a version has only some components installed,
-`ocp use` links the ones present and unsets the bare symlink for any that are
-missing (warning as it does so), and `ocp list` annotates each version with
-the components it has.
+are mutually exclusive. Each fetches one component.
 
-`ocp list-versions` lists the concrete versions on the mirror, optionally
-filtered by an `X.Y` (or a channel like `stable-4.20`, which is reduced to its
-`4.20` line). `ocp list-channels <X.Y>` lists that minor's release channels
-(`candidate-`, `fast-`, `latest-`, `stable-`) alongside the version each
-currently resolves to — handy for seeing, e.g., what `stable-4.20` points at
-before installing. (`list-remote` remains as a hidden alias for
-`list-versions`.)
+A `get` downloads only the components that are not yet installed. For example,
+`ocp get --with-installer 4.14.1` after an earlier `ocp get 4.14.1` adds only
+the installer. Add `--use` to activate the version after the download
+completes.
 
-Both commands annotate anything you already have installed locally with
-`(installed: ...)` and the components present, so you can tell at a glance
-what's downloaded:
+When a version has only some components installed, `ocp use` links the ones
+that are present. It removes the bare symlink for components that are not
+installed and shows a warning. `ocp list` shows each version with the
+components it has.
+
+`ocp list-versions` lists the versions on the mirror. You can filter by a
+minor version (`4.14`) or a channel (`stable-4.20`). A channel is reduced to
+its minor version line. `list-remote` is a hidden alias for `list-versions`.
+
+`ocp list-channels <X.Y>` lists the release channels for a minor version
+(`candidate-`, `fast-`, `latest-`, `stable-`). It shows the version that each
+channel points to. Use this to see what a channel resolves to before you
+install.
+
+Both commands mark versions that you have installed locally with
+`(installed: ...)` and the components that are present:
 
 ```
 $ ocp list-channels 4.20
@@ -92,48 +99,60 @@ ocp use 4.14.1                     # oc/kubectl now point at 4.14.1
 ocp list
 ```
 
-Version arguments accept an exact version (`4.14.1`), a mirror channel
-(`stable-4.15`, `latest-4.16`, `candidate-4.17`, `fast-4.14`, ...), or a
-short major.minor (`4.18`) which resolves via the `stable` channel. Channels
-are resolved to a concrete version via the mirror's `release.txt`, so
-binaries are always named with the real version number.
+Version arguments accept three forms:
+
+- An exact version (`4.14.1`)
+- A mirror channel (`stable-4.15`, `latest-4.16`, `candidate-4.17`, `fast-4.14`)
+- A short major.minor (`4.18`), which resolves through the `stable` channel.
+
+Channels resolve to a concrete version through the mirror's `release.txt`. The
+binaries always use the real version number in their names.
 
 ### oc-mirror
 
-`oc-mirror` is managed as an optional fourth component. It's opt-in because the
-mirror only ships it for **Linux** (x86_64 and arm64 — there is no macOS build).
-Fetch it alongside a normal `get` with `--with-mirror`, on its own with
-`--mirror-only`, or always-on by exporting `OCP_WITH_MIRROR=1`. Once installed
-it behaves like the others: `ocp use` links the bare `oc-mirror`, and `ocp list`
-/ `ocp remove` include it.
+`oc-mirror` is an optional fourth component. It is opt-in because the mirror
+ships it only for **Linux** (x86_64 and arm64). There is no macOS build.
 
-From 4.16 the mirror publishes two builds — `oc-mirror.tar.gz` (RHEL8) and
-`oc-mirror.rhel9.tar.gz` (RHEL9, which oc-mirror v2 expects). `ocp` installs the
-RHEL9 build when it's available and falls back to the plain build otherwise; use
-`--rhel8` to force the plain build. (To switch an already-installed version's
-build, `ocp remove <ver>` first.) On arm64 hosts the binary is pulled from the
-mirror's `arm64/` client tree automatically.
+You can fetch it in three ways:
+
+- With a normal `get`, add `--with-mirror`.
+- On its own, use `--mirror-only`.
+- To include it with every `get`, export `OCP_WITH_MIRROR=1`.
+
+After you install it, `oc-mirror` works like the other components. `ocp use`
+links the bare `oc-mirror` name. `ocp list` and `ocp remove` include it.
+
+From version 4.16, the mirror publishes two builds: `oc-mirror.tar.gz` (RHEL8)
+and `oc-mirror.rhel9.tar.gz` (RHEL9, which oc-mirror v2 uses). If the RHEL9
+build is available, `ocp` installs it. If not, it installs the RHEL8 build.
+Use `--rhel8` to force the RHEL8 build.
+
+To switch the build for a version that is already installed, remove it first
+with `ocp remove <ver>`. On arm64 hosts, the tool downloads the binary from
+the mirror's `arm64/` client tree automatically.
 
 ## Platforms
 
-The platform is auto-detected from `uname` (OS + arch):
+The platform is detected automatically from `uname` (OS + architecture):
 
-| Host | Tarball used |
-|------|--------------|
+| Host | Tarball |
+|------|---------|
 | Linux x86_64 | `linux` |
 | Linux arm64 / aarch64 | `linux-arm64` |
 | macOS Intel | `mac` |
 | macOS Apple Silicon | `mac-arm64` |
 
-Force it with `OCP_PLATFORM` (e.g. `OCP_PLATFORM=mac-arm64`).
+To override the detected platform, set `OCP_PLATFORM` (for example,
+`OCP_PLATFORM=mac-arm64`).
 
-All four of these are served from a single mirror directory. Despite the
-`x86_64` in the default URL, that path is the mirror's *cross-platform* client
-tree — the `linux-arm64`, `mac`, and `mac-arm64` tarballs all live there too
-(the arm64 binaries are not in the sibling `arm64/` tree). Linux `ppc64le` and
-`s390x` are **not** supported: the client tarballs exist there but the matching
-`openshift-install` does not, and those arches are rejected unless you set
-`OCP_PLATFORM`/`OCP_BASE_URL` yourself.
+All four platforms are served from one mirror directory. The `x86_64` in the
+default URL is the mirror's cross-platform client tree. The `linux-arm64`,
+`mac`, and `mac-arm64` tarballs all live there. The arm64 binaries are not in
+the separate `arm64/` tree.
+
+Linux `ppc64le` and `s390x` are **not** supported. The client tarballs exist
+for those architectures, but `openshift-install` does not. The tool rejects
+those architectures unless you set `OCP_PLATFORM` and `OCP_BASE_URL` yourself.
 
 ## Environment variables
 
@@ -142,32 +161,31 @@ tree — the `linux-arm64`, `mac`, and `mac-arm64` tarballs all live there too
 | `OCP_BIN_DIR` | Install directory (default `~/.local/bin`) |
 | `OCP_PLATFORM` | Override the detected platform |
 | `OCP_INSECURE` | Set to `1` to continue past a checksum mismatch |
-| `OCP_WITH_INSTALLER` | Set to `1` to always include the installer in a default `get` |
-| `OCP_WITH_MIRROR` | Set to `1` to always include oc-mirror in a default `get` |
+| `OCP_WITH_INSTALLER` | Set to `1` to always include the installer with `get` |
+| `OCP_WITH_MIRROR` | Set to `1` to always include oc-mirror with `get` |
 | `OCP_BASE_URL` | Mirror clients directory (default: the cross-platform `x86_64` tree) |
 | `OCP_UPDATE_URL` | Source URL for `ocp update` (default: GitHub raw, `main`) |
-| `OCP_CHANGELOG_URL` | Source URL for release notes shown by `ocp update` (default: `CHANGELOG.md` alongside `OCP_UPDATE_URL`) |
+| `OCP_CHANGELOG_URL` | Source URL for release notes from `ocp update` (default: `CHANGELOG.md` alongside `OCP_UPDATE_URL`) |
 
-## Checksums & Apple Silicon
+## Checksums and Apple Silicon
 
-Each tarball is verified against the mirror's `sha256sum.txt` before
-extraction; on most platforms a mismatch aborts the install.
+Before extraction, the tool compares each tarball against the mirror's
+`sha256sum.txt`. On most platforms, a mismatch stops the install.
 
-**Exception:** the macOS Apple Silicon (`mac-arm64`) binaries are re-signed
-and notarized by Apple *after* the mirror publishes `sha256sum.txt`, so their
+**Exception:** Apple re-signs and notarizes the macOS Apple Silicon
+(`mac-arm64`) binaries after the mirror publishes `sha256sum.txt`. The
 published hashes never match the served files. For `mac-arm64`, `ocp` reports
-the mismatch as a note and continues. (Intel-mac, linux, and linux-arm64 all
-verify cleanly.)
+the mismatch as a note and continues. Intel Mac, Linux, and Linux arm64
+tarballs all match.
 
 ## Requirements
 
-`curl`, `tar`, and either `sha256sum` (Linux) or `shasum` (macOS).
+`curl`, `tar`, and one of: `sha256sum` (Linux) or `shasum` (macOS).
 
 ## Tests
 
-A small offline test suite lives in `tests/` — it stubs the network (a fake
-`curl`, `file://` update sources) and a temporary `OCP_BIN_DIR`, so it needs no
-mirror access:
+An offline test suite lives in `tests/`. It uses a fake `curl`, `file://`
+update sources, and a temporary `OCP_BIN_DIR`. It does not need mirror access.
 
 ```sh
 tests/run.sh                 # test the ocp in this repo
