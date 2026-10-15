@@ -4,6 +4,11 @@ All notable changes to `ocp`. Newest first. Each `## X.Y.Z` section matches a
 `VERSION` released to `main`; `ocp update` prints the sections between a user's
 current version and the version they update to.
 
+## 0.8.0
+- support OpenShift 5.x: `ocp get 5.0` now works before 5.0 ships a stable channel
+- short versions (`X.Y`) resolve via stable, then fast, then candidate, and report which channel was used
+- `--with-mirror` reports `oc-mirror is not published for <version>` and skips it, instead of failing on a missing download; `--mirror-only` still exits non-zero
+
 ## 0.7.0
 - `ocp get 4.18` (short major.minor version) now resolves to the latest stable channel release automatically
 - hints about `fast-X.Y` and `candidate-X.Y` alternatives when using short version

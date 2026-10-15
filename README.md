@@ -90,6 +90,7 @@ stable-4.20      4.20.24  (installed: installer, oc, kubectl)
 
 ```sh
 ocp get 4.18                       # short version — latest stable-4.18
+ocp get 5.0                        # falls back to fast/candidate if no stable-5.0
 ocp get 4.14.1                     # CLI only (oc + kubectl)
 ocp get --with-installer 4.14.1    # CLI + installer
 ocp get stable-4.15                # channel — resolves to the concrete version
@@ -103,7 +104,10 @@ Version arguments accept three forms:
 
 - An exact version (`4.14.1`)
 - A mirror channel (`stable-4.15`, `latest-4.16`, `candidate-4.17`, `fast-4.14`)
-- A short major.minor (`4.18`), which resolves through the `stable` channel.
+- A short major.minor (`4.18`). The tool tries the `stable` channel first. If
+  the mirror has no `stable` channel for that minor version, the tool tries
+  `fast`, then `candidate`. The output shows the channel that it used. This
+  lets you install a minor version before it is GA, such as `5.0`.
 
 Channels resolve to a concrete version through the mirror's `release.txt`. The
 binaries always use the real version number in their names.
@@ -130,6 +134,11 @@ Use `--rhel8` to force the RHEL8 build.
 To switch the build for a version that is already installed, remove it first
 with `ocp remove <ver>`. On arm64 hosts, the tool downloads the binary from
 the mirror's `arm64/` client tree automatically.
+
+Some releases do not publish `oc-mirror`. The 5.0 pre-releases are an example.
+For these releases, `--with-mirror` shows a message and skips `oc-mirror`. The
+other components still install. `--mirror-only` stops with an error, because
+it has nothing to install.
 
 ## Platforms
 
