@@ -388,7 +388,7 @@ cmd_get() {
 
   if [ "$need_installer" = 0 ] && [ "$need_client" = 0 ] && [ "$need_mirror" = 0 ]; then
     info "$version already installed (requested components present)"
-    if [ "$do_use" = 1 ]; then cmd_use "$version"; else check_path; fi
+    if [ "$do_use" = 1 ]; then cmd_use "$version"; else activation_hint "$version"; fi
     return 0
   fi
 
@@ -460,9 +460,26 @@ cmd_get() {
   if [ "$do_use" = 1 ]; then
     cmd_use "$version"
   else
-    info "Run 'ocp use $version' to activate it."
-    check_path
+    activation_hint "$version"
   fi
+}
+
+# Close out a 'get' that didn't activate. A channel (or a short version) can
+# resolve to something newer than what the bare symlinks point at, so name the
+# version that is still active rather than only suggesting 'use'.
+# Args: <just-installed-version>
+activation_hint() {
+  local version="$1" active
+  active="$(active_version)"
+  if [ -z "$active" ]; then
+    info "Run 'ocp use $version' to activate it."
+  elif [ "$active" = "$version" ]; then
+    info "$version is already the active version."
+  else
+    info "Note: $active is still the active version."
+    info "Run 'ocp use $version' to switch."
+  fi
+  check_path
 }
 
 # Echo the active version, read from the first bare symlink that exists.

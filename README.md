@@ -61,6 +61,18 @@ A `get` downloads only the components that are not yet installed. For example,
 the installer. Add `--use` to activate the version after the download
 completes.
 
+A `get` without `--use` does not change the active version. A channel or a
+short version can resolve to a build that is newer than the active one. To
+prevent a mistake, the tool shows the version that is still active:
+
+```
+$ ocp get 5.0
+Resolved 'candidate-5.0' -> 5.0.0-rc.7 (linux)
+Installed: /home/you/.local/bin/oc-5.0.0-rc.7
+Note: 5.0.0-rc.6 is still the active version.
+Run 'ocp use 5.0.0-rc.7' to switch.
+```
+
 When a version has only some components installed, `ocp use` links the ones
 that are present. It removes the bare symlink for components that are not
 installed and shows a warning. `ocp list` shows each version with the
