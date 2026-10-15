@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.7.0"
+VERSION="0.8.0"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -147,7 +147,8 @@ Usage:
   ocp get [flags] [--use] <version|channel|X.Y>
                               Download, verify and install a version.
                               A short version (e.g. 4.18) resolves via the
-                              stable channel automatically.
+                              stable channel, falling back to fast then
+                              candidate for a minor that is not yet GA.
                               By default, only fetches the CLI (oc + kubectl).
                               --with-installer also fetch openshift-install
                               --with-mirror    also fetch oc-mirror (Linux only)
@@ -166,6 +167,7 @@ Usage:
 
 Examples:
   ocp get 4.18              (resolves to latest stable-4.18)
+  ocp get 5.0               (falls back to fast/candidate if there is no stable-5.0)
   ocp get 4.14.1
   ocp get stable-4.15
   ocp get --with-installer 4.14.1
@@ -192,13 +194,22 @@ EOF
 }
 
 # Resolve a version-or-channel argument to a concrete version string by
-# reading <arg>/release.txt from the mirror. Echoes the concrete version.
-resolve_version() {
+# reading <arg>/release.txt from the mirror. Echoes the concrete version, or
+# returns 1 quietly when the ref isn't on the mirror -- callers that probe a
+# list of candidate channels depend on that silence.
+try_resolve_version() {
   local ref="$1" release name
-  release="$(curl -fsSL "$BASE_URL/$ref/release.txt" 2>/dev/null)" \
-    || die "could not find '$ref' on the mirror ($BASE_URL/$ref/)"
+  release="$(curl -fsSL "$BASE_URL/$ref/release.txt" 2>/dev/null)" || return 1
   name="$(printf '%s\n' "$release" | sed -n 's/^Name:[[:space:]]*//p' | head -n1)"
-  [ -n "$name" ] || die "could not parse a version from $ref/release.txt"
+  [ -n "$name" ] || return 1
+  printf '%s\n' "$name"
+}
+
+# As try_resolve_version, but fatal when the ref can't be resolved.
+resolve_version() {
+  local ref="$1" name
+  name="$(try_resolve_version "$ref")" \
+    || die "could not find '$ref' on the mirror ($BASE_URL/$ref/)"
   printf '%s\n' "$name"
 }
 
@@ -220,6 +231,7 @@ verify_checksum() {
 # neither version- nor platform-qualified (always oc-mirror[.rhel9].tar.gz,
 # extracting a single 'oc-mirror' binary), is Linux-only, and on arm64 is served
 # from a separate mirror tree -- so it gets its own fetch routine.
+# Returns 1 (after a note) when the release publishes no oc-mirror at all.
 # Args: <ref> <version> <platform> <force_rhel8>
 fetch_oc_mirror() {
   local ref="$1" version="$2" platform="$3" force_rhel8="$4"
@@ -237,6 +249,13 @@ fetch_oc_mirror() {
   info "Downloading oc-mirror sha256sum.txt ..."
   curl -fsSL "$mirror_url/$ref/sha256sum.txt" -o "$sumfile" \
     || die "failed to download oc-mirror sha256sum.txt from $mirror_url/$ref/"
+
+  # Some releases ship no oc-mirror at all (the 5.0 pre-releases, for one). Say
+  # so and let the caller carry on, instead of 404ing mid-download.
+  if ! grep -qE '[[:space:]]oc-mirror(\.rhel9)?\.tar\.gz$' "$sumfile"; then
+    info "oc-mirror is not published for $version; skipping"
+    return 1
+  fi
 
   # Prefer the RHEL9 build (what oc-mirror v2 wants) when present; fall back to
   # the plain (RHEL8) build. --rhel8 forces the plain build.
@@ -290,13 +309,6 @@ cmd_get() {
   done
   [ -n "$ref" ] || die "usage: ocp get [--cli-only|--installer-only|--mirror-only|--with-installer|--with-mirror] <version|channel>"
 
-  # Short version (X.Y with no patch) -> resolve via stable channel.
-  if printf '%s\n' "$ref" | grep -qE '^[0-9]+\.[0-9]+$'; then
-    info "Short version '$ref' — resolving via stable-$ref channel"
-    info "  (use fast-$ref or candidate-$ref for other channels)"
-    ref="stable-$ref"
-  fi
-
   if [ "$flag_cli_only" = 1 ] && [ "$flag_installer_only" = 1 ]; then
     die "--cli-only and --installer-only are mutually exclusive"
   fi
@@ -342,7 +354,29 @@ cmd_get() {
     esac
   fi
 
-  version="$(resolve_version "$ref")"
+  # Short version (X.Y with no patch) -> resolve via a release channel. Prefer
+  # stable, then fast, then candidate: a minor that hasn't GA'd yet publishes
+  # only a candidate channel, and gains stable later with no change here.
+  # Probing keeps the resolved version, so the stable path costs the same one
+  # request as before.
+  version=""
+  if printf '%s\n' "$ref" | grep -qE '^[0-9]+\.[0-9]+$'; then
+    local minor="$ref" ch found=""
+    for ch in "stable-$minor" "fast-$minor" "candidate-$minor"; do
+      if version="$(try_resolve_version "$ch")"; then found="$ch"; break; fi
+    done
+    [ -n "$found" ] || die "no stable/fast/candidate channel for '$minor' on the mirror"
+    if [ "$found" = "stable-$minor" ]; then
+      info "Short version '$minor' — resolving via stable-$minor channel"
+      info "  (use fast-$minor or candidate-$minor for other channels)"
+    else
+      info "Short version '$minor' — no stable-$minor on the mirror"
+      info "Falling back to $found"
+    fi
+    ref="$found"
+  fi
+
+  [ -n "$version" ] || version="$(resolve_version "$ref")"
   info "Resolved '$ref' -> $version ($platform)"
 
   # Only fetch components that are both requested and not already installed,
@@ -354,7 +388,7 @@ cmd_get() {
 
   if [ "$need_installer" = 0 ] && [ "$need_client" = 0 ] && [ "$need_mirror" = 0 ]; then
     info "$version already installed (requested components present)"
-    if [ "$do_use" = 1 ]; then cmd_use "$version"; else check_path; fi
+    if [ "$do_use" = 1 ]; then cmd_use "$version"; else activation_hint "$version"; fi
     return 0
   fi
 
@@ -415,15 +449,37 @@ cmd_get() {
 
   # --- oc-mirror (separate tree/naming/variants) -----------------------------
   if [ "$need_mirror" = 1 ]; then
-    fetch_oc_mirror "$ref" "$version" "$platform" "$force_rhel8"
+    if ! fetch_oc_mirror "$ref" "$version" "$platform" "$force_rhel8"; then
+      # Nothing else was requested, so there is nothing left to install.
+      if [ "$mirror_only" = 1 ]; then
+        die "--mirror-only requested but oc-mirror is not published for $version"
+      fi
+    fi
   fi
 
   if [ "$do_use" = 1 ]; then
     cmd_use "$version"
   else
-    info "Run 'ocp use $version' to activate it."
-    check_path
+    activation_hint "$version"
   fi
+}
+
+# Close out a 'get' that didn't activate. A channel (or a short version) can
+# resolve to something newer than what the bare symlinks point at, so name the
+# version that is still active rather than only suggesting 'use'.
+# Args: <just-installed-version>
+activation_hint() {
+  local version="$1" active
+  active="$(active_version)"
+  if [ -z "$active" ]; then
+    info "Run 'ocp use $version' to activate it."
+  elif [ "$active" = "$version" ]; then
+    info "$version is already the active version."
+  else
+    info "Note: $active is still the active version."
+    info "Run 'ocp use $version' to switch."
+  fi
+  check_path
 }
 
 # Echo the active version, read from the first bare symlink that exists.
