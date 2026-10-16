@@ -4,6 +4,10 @@ All notable changes to `ocp`. Newest first. Each `## X.Y.Z` section matches a
 `VERSION` released to `main`; `ocp update` prints the sections between a user's
 current version and the version they update to.
 
+## 0.8.1
+- `ocp list` now shows the disk usage of each installed version, not just the total
+- the summary line is relabelled `Total disk:` so the number says what it measures
+
 ## 0.8.0
 - support OpenShift 5.x: `ocp get 5.0` now works before 5.0 ships a stable channel
 - short versions (`X.Y`) resolve via stable, then fast, then candidate, and report which channel was used
