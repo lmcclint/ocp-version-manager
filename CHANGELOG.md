@@ -4,6 +4,9 @@ All notable changes to `ocp`. Newest first. Each `## X.Y.Z` section matches a
 `VERSION` released to `main`; `ocp update` prints the sections between a user's
 current version and the version they update to.
 
+## 0.9.1
+- `ocp list channels 4` (a bare major) now suggests the newest minor for that major instead of just reporting no match -- channel dirs are named per-minor, so a bare major could never match
+
 ## 0.9.0
 - the list commands are now `ocp list <noun>`: `list available` (was `list-versions`) and `list channels` (was `list-channels`)
 - `ocp list` is unchanged and still lists installed versions; `ocp list installed` is the explicit form

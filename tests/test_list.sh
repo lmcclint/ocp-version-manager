@@ -90,6 +90,20 @@ err="$("$OCP" list channels 2>&1 >/dev/null)"; rc=$?
 [ "$rc" -ne 0 ] && ok "nonzero exit without arg" || bad "expected nonzero exit"
 assert_re 'usage: ocp list channels' "$err" "usage message shown"
 
+echo "=== list channels: bare major suggests a minor ==="
+# Channel dirs are named per-minor, so '4' can never match. The fixture has
+# 4.2, 4.20 and 4.21 channels, so 4.21 is the newest minor to point at.
+err="$("$OCP" list channels 4 2>&1 >/dev/null)"; rc=$?
+assert_eq 0 "$rc" "exit 0 on bare major"
+assert_re "no channels on the mirror match '4'" "$err" "still reports the no-match"
+assert_re 'per minor version' "$err" "explains channels are per-minor"
+assert_re 'try: ocp list channels 4\.21' "$err" "suggests the newest minor"
+
+echo "=== list channels: bare major with no channels falls back ==="
+err="$("$OCP" list channels 9 2>&1 >/dev/null)"
+assert_re "no channels on the mirror match '9'" "$err" "plain no-match message"
+assert_no_re 'try: ocp list channels' "$err" "no suggestion when the major has none"
+
 echo "=== list channels: graceful no-match ==="
 out="$("$OCP" list channels 9.99 2>/dev/null)"; rc=$?
 assert_eq 0 "$rc" "exit 0 on no match"
