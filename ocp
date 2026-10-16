@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.9.0"
+VERSION="0.9.1"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -657,7 +657,23 @@ cmd_list_channels() {
     | vsort | uniq)" || true
 
   if [ -z "$channels" ]; then
-    info "no channels on the mirror match '${1:-}'"
+    # A bare major ('ocp list channels 4') can never match, since channel dirs
+    # are named per-minor. Point at the newest minor for that major instead of
+    # leaving a dead end -- the listing is already in hand, so this is free.
+    local newest=""
+    if printf '%s\n' "$filter" | grep -qE '^[0-9]+$'; then
+      newest="$(printf '%s\n' "$listing" \
+        | grep -oE 'href="[^"]+/"' \
+        | sed -E 's/href="([^"]+)\/"/\1/' \
+        | sed -nE "s/^[A-Za-z]+-(${filter}\.[0-9]+)\$/\1/p" \
+        | vsort | uniq | tail -n1)" || true
+    fi
+    if [ -n "$newest" ]; then
+      info "no channels on the mirror match '${1:-}' -- channels are listed per minor version"
+      info "try: ocp list channels $newest   (newest minor for ${filter}.x)"
+    else
+      info "no channels on the mirror match '${1:-}'"
+    fi
     return 0
   fi
 
