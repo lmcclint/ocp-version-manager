@@ -9,7 +9,7 @@
 # Subcommands:
 #   ocp get <version|channel|X.Y>  Download + verify + install a version
 #   ocp use <version>           Point openshift-install/oc/kubectl at a version
-#   ocp list                    List installed versions (* = active)
+#   ocp list                    List installed versions with disk usage (* = active)
 #   ocp list-versions [X.Y]     List versions available on the mirror
 #   ocp list-channels <X.Y>     List a minor's channels and their versions
 #   ocp remove <version>        Remove an installed version's binaries
@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.8.0"
+VERSION="0.8.1"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -158,7 +158,7 @@ Usage:
                               --rhel8          oc-mirror: force the RHEL8 build
                               --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
-  ocp list                    List installed versions (* = active)
+  ocp list                    List installed versions with disk usage (* = active)
   ocp list-versions [X.Y]     List versions available on the mirror
   ocp list-channels <X.Y>     List a minor's channels and the version each points to
   ocp remove <version>        Remove an installed version
@@ -506,6 +506,20 @@ installed_components() {
   printf '%s' "$present"
 }
 
+# Echo the human-readable disk usage of a version's binaries (e.g. "1.1G"),
+# or nothing if none are installed. du measures allocated blocks, so the
+# per-version figures can differ slightly from the sum of their file sizes.
+version_disk() {
+  local version="$1" comp f
+  local files=()
+  for comp in "${ALL_COMPONENTS[@]}"; do
+    f="$BIN_DIR/$comp-$version"
+    [ -f "$f" ] && files+=("$f")
+  done
+  [ "${#files[@]}" -gt 0 ] || return 0
+  du -ch "${files[@]}" 2>/dev/null | tail -n1 | awk '{print $1}'
+}
+
 cmd_use() {
   local version="${1:-}"
   [ -n "$version" ] || die "usage: ocp use <version>"
@@ -563,17 +577,19 @@ cmd_list() {
     return 0
   fi
 
-  # Unique, version-sorted; annotate each with the components present.
+  # Unique, version-sorted; annotate each with its disk usage and the
+  # components present.
   local version marker
   printf '%s\n' "${versions[@]}" | vsort | uniq | while IFS= read -r version; do
     [ "$version" = "$active" ] && marker='*' || marker=' '
-    printf '%s %s  (%s)\n' "$marker" "$version" "$(installed_components "$version")"
+    printf '%s %-9s %5s  (%s)\n' "$marker" "$version" \
+      "$(version_disk "$version")" "$(installed_components "$version")"
   done
 
   # Total disk consumed by the installed binaries (du measures actual usage).
   local total
   total="$(du -ch "${files[@]}" 2>/dev/null | tail -n1 | awk '{print $1}')" || true
-  [ -n "$total" ] && printf 'Total: %s\n' "$total"
+  [ -n "$total" ] && printf '\nTotal disk: %s\n' "$total"
 }
 
 cmd_list_versions() {

@@ -23,10 +23,11 @@ for b in oc kubectl; do stub "$OCP_BIN_DIR/$b-4.15.0"; done                     
 stub "$OCP_BIN_DIR/openshift-install-4.16.0"                                     # installer-only
 
 out="$("$OCP" list 2>&1)"
-assert_contains "4.14.1  (installer, oc, kubectl)" "$out" "full install annotated"
-assert_contains "4.15.0  (oc, kubectl)"            "$out" "cli-only annotated"
-assert_contains "4.16.0  (installer)"              "$out" "installer-only annotated"
-assert_re '^Total: [0-9]' "$out" "list shows a human-readable total size"
+SZ='[0-9][0-9.]*[A-Z]?'   # du -h size: '4.0K' (GNU + BSD), '0B' (BSD empty)
+assert_re "4\.14\.1 +$SZ +\(installer, oc, kubectl\)" "$out" "full install annotated"
+assert_re "4\.15\.0 +$SZ +\(oc, kubectl\)"            "$out" "cli-only annotated"
+assert_re "4\.16\.0 +$SZ +\(installer\)"              "$out" "installer-only annotated"
+assert_re '^Total disk: [0-9]' "$out" "list shows a human-readable total size"
 
 echo "=== use cli-only version: installer symlink unset + warned ==="
 out="$("$OCP" use 4.15.0 2>&1)"

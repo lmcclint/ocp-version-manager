@@ -12,8 +12,9 @@ for b in openshift-install oc kubectl oc-mirror; do stub "$OCP_BIN_DIR/$b-4.18.1
 stub "$OCP_BIN_DIR/oc-mirror-4.17.0"                                                       # mirror-only
 
 out="$("$OCP" list 2>&1)"
-assert_contains "4.18.10  (installer, oc, kubectl, oc-mirror)" "$out" "full+mirror annotated"
-assert_contains "4.17.0  (oc-mirror)"                          "$out" "mirror-only annotated"
+SZ='[0-9][0-9.]*[A-Z]?'   # du -h size column
+assert_re "4\.18\.10 +$SZ +\(installer, oc, kubectl, oc-mirror\)" "$out" "full+mirror annotated"
+assert_re "4\.17\.0 +$SZ +\(oc-mirror\)"                          "$out" "mirror-only annotated"
 # The 'oc-*' glob must not mis-read oc-mirror-* as an 'oc' version named 'mirror-...'.
 assert_no_re 'mirror-4\.18\.10' "$out" "oc glob does not swallow oc-mirror files"
 

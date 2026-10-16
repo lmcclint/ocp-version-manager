@@ -31,7 +31,7 @@ ocp get --installer-only <ver>  # only openshift-install
 ocp get --mirror-only <ver>     # only oc-mirror (Linux only)
 ocp get --use <ver>             # install, then activate it (runs 'use')
 ocp use <version>               # activate a version (swap symlinks)
-ocp list                        # list installed versions (* = active, with components + total size)
+ocp list                        # list installed versions (* = active, with components + disk usage)
 ocp list-versions [X.Y|chan]    # list versions on the mirror (e.g. 4.20, stable-4.20)
 ocp list-channels <X.Y>        # list a minor's channels + the version each points to
 ocp remove <version>            # remove an installed version's binaries
@@ -76,7 +76,17 @@ Run 'ocp use 5.0.0-rc.7' to switch.
 When a version has only some components installed, `ocp use` links the ones
 that are present. It removes the bare symlink for components that are not
 installed and shows a warning. `ocp list` shows each version with the
-components it has.
+components it has. It also shows the disk space that each version uses, and
+the total:
+
+```
+$ ocp list
+* 4.20.24    1.1G  (installer, oc, kubectl)
+  4.19.12    743M  (oc, kubectl)
+  4.16.5     1.6G  (installer, oc, kubectl, oc-mirror)
+
+Total disk: 3.4G
+```
 
 `ocp list-versions` lists the versions on the mirror. You can filter by a
 minor version (`4.14`) or a channel (`stable-4.20`). A channel is reduced to
