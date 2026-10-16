@@ -9,16 +9,16 @@
 # Subcommands:
 #   ocp get <version|channel|X.Y>  Download + verify + install a version
 #   ocp use <version>           Point openshift-install/oc/kubectl at a version
-#   ocp list                    List installed versions with disk usage (* = active)
-#   ocp list-versions [X.Y]     List versions available on the mirror
-#   ocp list-channels <X.Y>     List a minor's channels and their versions
+#   ocp list [installed]        List installed versions with disk usage (* = active)
+#   ocp list available [X.Y]    List versions available on the mirror
+#   ocp list channels <X.Y>     List a minor's channels and their versions
 #   ocp remove <version>        Remove an installed version's binaries
 #
 set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.8.1"
+VERSION="0.9.0"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -158,9 +158,9 @@ Usage:
                               --rhel8          oc-mirror: force the RHEL8 build
                               --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
-  ocp list                    List installed versions with disk usage (* = active)
-  ocp list-versions [X.Y]     List versions available on the mirror
-  ocp list-channels <X.Y>     List a minor's channels and the version each points to
+  ocp list [installed]        List installed versions with disk usage (* = active)
+  ocp list available [X.Y]    List versions available on the mirror
+  ocp list channels <X.Y>     List a minor's channels and the version each points to
   ocp remove <version>        Remove an installed version
   ocp update                  Update ocp itself to the latest version
   ocp --version               Print the ocp version
@@ -174,8 +174,8 @@ Examples:
   ocp get --installer-only stable-4.15
   ocp get --use 4.14.1
   ocp use 4.14.1
-  ocp list-versions 4.14
-  ocp list-channels 4.14
+  ocp list available 4.14
+  ocp list channels 4.14
 
 Binaries are installed to: $BIN_DIR
 
@@ -597,7 +597,7 @@ cmd_list_versions() {
   local filter="${1:-}" url="$BASE_URL/" pat=""
   if [ -n "$filter" ]; then
     # Reduce a channel-style filter (stable-4.20, fast-4.16, ...) to its
-    # version part so 'list-versions stable-4.20' lists the 4.20 line, the same
+    # version part so 'list available stable-4.20' lists the 4.20 line, the same
     # way channels are accepted by 'get'/'use'.
     filter="$(printf '%s\n' "$filter" | sed -E 's/^[A-Za-z]+-//')"
     # Anchor at a version-segment boundary (next char is '.' or end of line)
@@ -641,7 +641,7 @@ cmd_list_versions() {
 cmd_list_channels() {
   require curl
   local filter="${1:-}"
-  [ -n "$filter" ] || die "usage: ocp list-channels <X.Y>  (e.g. ocp list-channels 4.20)"
+  [ -n "$filter" ] || die "usage: ocp list channels <X.Y>  (e.g. ocp list channels 4.20)"
   # Accept 'stable-4.20' too by reducing it to its X.Y part.
   filter="$(printf '%s\n' "$filter" | sed -E 's/^[A-Za-z]+-//')"
 
@@ -675,6 +675,20 @@ cmd_list_channels() {
   done <<EOF
 $channels
 EOF
+}
+
+# Route 'ocp list <noun>' to the per-noun command. The noun is optional and
+# defaults to 'installed' so the common case stays a single word. A bare
+# version is rejected rather than guessed at -- see the die below.
+cmd_list_group() {
+  local noun="${1:-installed}"
+  [ "$#" -gt 0 ] && shift || true
+  case "$noun" in
+    installed) cmd_list "$@" ;;
+    available) cmd_list_versions "$@" ;;
+    channels)  cmd_list_channels "$@" ;;
+    *) die "unknown 'list' subcommand: $noun  (expected: installed | available | channels)" ;;
+  esac
 }
 
 cmd_remove() {
@@ -760,7 +774,8 @@ main() {
   case "$sub" in
     get)         cmd_get "$@" ;;
     use)         cmd_use "$@" ;;
-    list)        cmd_list "$@" ;;
+    list)        cmd_list_group "$@" ;;
+    # Undocumented aliases for the pre-0.9.0 flat command names.
     list-versions|list-remote) cmd_list_versions "$@" ;;
     list-channels) cmd_list_channels "$@" ;;
     remove|rm)   cmd_remove "$@" ;;

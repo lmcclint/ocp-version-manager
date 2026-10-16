@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# list-versions (and its list-remote alias) and list-channels.
+# 'list available' / 'list channels' and the legacy flat-name aliases.
 set -u
 . "$(dirname "$0")/lib.sh"
 
@@ -40,35 +40,39 @@ CURL
 export OCP_BIN_DIR="$TESTDIR/bin-dir"
 mkdir -p "$OCP_BIN_DIR"
 
-echo "=== list-versions: channel filter reduces to its X.Y line ==="
-out="$("$OCP" list-versions stable-4.20 2>/dev/null)"
+echo "=== list available: channel filter reduces to its X.Y line ==="
+out="$("$OCP" list available stable-4.20 2>/dev/null)"
 assert_re '^4\.20\.0$'  "$out" "lists 4.20.0"
 assert_re '^4\.20\.10$' "$out" "lists 4.20.10"
 assert_no_re '^4\.2\.0$' "$out" "excludes 4.2.0"
 
-echo "=== list-versions: X.Y boundary ==="
-out="$("$OCP" list-versions 4.2 2>/dev/null)"
+echo "=== list available: X.Y boundary ==="
+out="$("$OCP" list available 4.2 2>/dev/null)"
 assert_re '^4\.2\.0$' "$out" "4.2 includes 4.2.0"
 assert_no_re '^4\.20\.' "$out" "4.2 excludes 4.20.x"
 
-echo "=== list-versions: exact version boundary ==="
-out="$("$OCP" list-versions 4.20.1 2>/dev/null)"
+echo "=== list available: exact version boundary ==="
+out="$("$OCP" list available 4.20.1 2>/dev/null)"
 assert_re '^4\.20\.1$' "$out" "includes 4.20.1"
 assert_no_re '^4\.20\.10$' "$out" "excludes 4.20.10"
 
-echo "=== list-remote alias still works ==="
-out="$("$OCP" list-remote 4.20 2>/dev/null)"
-assert_re '^4\.20\.1$' "$out" "alias lists 4.20.1"
+echo "=== legacy flat-name aliases still work ==="
+for alias in list-versions list-remote; do
+  out="$("$OCP" "$alias" 4.20 2>/dev/null)"
+  assert_re '^4\.20\.1$' "$out" "$alias lists 4.20.1"
+done
+out="$("$OCP" list-channels 4.20 2>/dev/null)"
+assert_re '^stable-4\.20[[:space:]]+4\.20\.24$' "$out" "list-channels resolves stable-4.20"
 
-echo "=== list-versions: graceful no-match ==="
-out="$("$OCP" list-versions 9.99 2>/dev/null)"; rc=$?
+echo "=== list available: graceful no-match ==="
+out="$("$OCP" list available 9.99 2>/dev/null)"; rc=$?
 assert_eq 0 "$rc" "exit 0 on no match"
 assert_eq "" "$out" "no stdout on no match"
-err="$("$OCP" list-versions 9.99 2>&1 >/dev/null)"
+err="$("$OCP" list available 9.99 2>&1 >/dev/null)"
 assert_re "no versions on the mirror match '9.99'" "$err" "no-match message"
 
-echo "=== list-channels <X.Y>: channels + resolved versions ==="
-out="$("$OCP" list-channels 4.20 2>/dev/null)"
+echo "=== list channels <X.Y>: channels + resolved versions ==="
+out="$("$OCP" list channels 4.20 2>/dev/null)"
 assert_re '^candidate-4\.20[[:space:]]+4\.20\.25$' "$out" "candidate-4.20 -> 4.20.25"
 assert_re '^fast-4\.20[[:space:]]+4\.20\.25$'      "$out" "fast-4.20 -> 4.20.25"
 assert_re '^latest-4\.20[[:space:]]+4\.20\.25$'    "$out" "latest-4.20 -> 4.20.25"
@@ -77,31 +81,45 @@ assert_no_re '^stable-4\.2[[:space:]]' "$out" "excludes stable-4.2 (boundary)"
 assert_no_re '^candidate-4\.21'        "$out" "excludes other minors"
 assert_no_re '^(stable|latest|fast|candidate)[[:space:]]' "$out" "excludes bare channels"
 
-echo "=== list-channels: accepts a full channel name ==="
-out="$("$OCP" list-channels stable-4.20 2>/dev/null)"
+echo "=== list channels: accepts a full channel name ==="
+out="$("$OCP" list channels stable-4.20 2>/dev/null)"
 assert_re '^stable-4\.20[[:space:]]+4\.20\.24$' "$out" "stable-4.20 arg -> the 4.20 channels"
 
-echo "=== list-channels: requires an argument ==="
-err="$("$OCP" list-channels 2>&1 >/dev/null)"; rc=$?
+echo "=== list channels: requires an argument ==="
+err="$("$OCP" list channels 2>&1 >/dev/null)"; rc=$?
 [ "$rc" -ne 0 ] && ok "nonzero exit without arg" || bad "expected nonzero exit"
-assert_re 'usage: ocp list-channels' "$err" "usage message shown"
+assert_re 'usage: ocp list channels' "$err" "usage message shown"
 
-echo "=== list-channels: graceful no-match ==="
-out="$("$OCP" list-channels 9.99 2>/dev/null)"; rc=$?
+echo "=== list channels: graceful no-match ==="
+out="$("$OCP" list channels 9.99 2>/dev/null)"; rc=$?
 assert_eq 0 "$rc" "exit 0 on no match"
-err="$("$OCP" list-channels 9.99 2>&1 >/dev/null)"
+err="$("$OCP" list channels 9.99 2>&1 >/dev/null)"
 assert_re "no channels on the mirror match '9.99'" "$err" "no-match message"
 
 echo "=== installed annotation reflects local components ==="
 stub "$OCP_BIN_DIR/oc-4.20.1"; stub "$OCP_BIN_DIR/kubectl-4.20.1"          # cli-only
 for b in openshift-install oc kubectl; do stub "$OCP_BIN_DIR/$b-4.20.24"; done  # full (stable-4.20 target)
 
-out="$("$OCP" list-versions 4.20 2>/dev/null)"
-assert_re '^4\.20\.1  \(installed: oc, kubectl\)$' "$out" "list-versions annotates partial install"
-assert_re '^4\.20\.0$' "$out" "list-versions leaves uninstalled versions plain"
+out="$("$OCP" list available 4.20 2>/dev/null)"
+assert_re '^4\.20\.1  \(installed: oc, kubectl\)$' "$out" "list available annotates partial install"
+assert_re '^4\.20\.0$' "$out" "list available leaves uninstalled versions plain"
 
-out="$("$OCP" list-channels 4.20 2>/dev/null)"
-assert_re '^stable-4\.20[[:space:]]+4\.20\.24[[:space:]]+\(installed: installer, oc, kubectl\)$' "$out" "list-channels annotates installed channel target"
-assert_no_re 'candidate-4\.20.*installed' "$out" "list-channels leaves uninstalled targets plain"
+out="$("$OCP" list channels 4.20 2>/dev/null)"
+assert_re '^stable-4\.20[[:space:]]+4\.20\.24[[:space:]]+\(installed: installer, oc, kubectl\)$' "$out" "list channels annotates installed channel target"
+assert_no_re 'candidate-4\.20.*installed' "$out" "list channels leaves uninstalled targets plain"
+
+echo "=== list noun parsing ==="
+assert_eq "$("$OCP" list 2>/dev/null)" "$("$OCP" list installed 2>/dev/null)" \
+  "'list installed' matches bare 'list'"
+
+err="$("$OCP" list bogus 2>&1 >/dev/null)"; rc=$?
+[ "$rc" -ne 0 ] && ok "unknown noun exits nonzero" || bad "expected nonzero exit"
+assert_re "unknown 'list' subcommand: bogus" "$err" "unknown noun message"
+
+# A bare version is not a noun -- it must error rather than be read as
+# 'list available <version>'.
+err="$("$OCP" list 4.20 2>&1 >/dev/null)"; rc=$?
+[ "$rc" -ne 0 ] && ok "version argument exits nonzero" || bad "expected nonzero exit"
+assert_re "unknown 'list' subcommand: 4.20" "$err" "version argument message"
 
 finish

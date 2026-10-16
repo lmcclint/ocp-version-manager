@@ -4,6 +4,12 @@ All notable changes to `ocp`. Newest first. Each `## X.Y.Z` section matches a
 `VERSION` released to `main`; `ocp update` prints the sections between a user's
 current version and the version they update to.
 
+## 0.9.0
+- the list commands are now `ocp list <noun>`: `list available` (was `list-versions`) and `list channels` (was `list-channels`)
+- `ocp list` is unchanged and still lists installed versions; `ocp list installed` is the explicit form
+- the old flat names (`list-versions`, `list-remote`, `list-channels`) still work as undocumented aliases
+- `ocp list <anything-else>` is an error naming the valid nouns, rather than a guess at what you meant
+
 ## 0.8.1
 - `ocp list` now shows the disk usage of each installed version, not just the total
 - the summary line is relabelled `Total disk:` so the number says what it measures
