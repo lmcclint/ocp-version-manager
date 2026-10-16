@@ -31,9 +31,9 @@ ocp get --installer-only <ver>  # only openshift-install
 ocp get --mirror-only <ver>     # only oc-mirror (Linux only)
 ocp get --use <ver>             # install, then activate it (runs 'use')
 ocp use <version>               # activate a version (swap symlinks)
-ocp list                        # list installed versions (* = active, with components + disk usage)
-ocp list-versions [X.Y|chan]    # list versions on the mirror (e.g. 4.20, stable-4.20)
-ocp list-channels <X.Y>        # list a minor's channels + the version each points to
+ocp list [installed]            # list installed versions (* = active, with components + disk usage)
+ocp list available [X.Y|chan]   # list versions on the mirror (e.g. 4.20, stable-4.20)
+ocp list channels <X.Y>         # list a minor's channels + the version each points to
 ocp remove <version>            # remove an installed version's binaries
 ocp update                      # update ocp itself to the latest version
 ocp --version                   # print the ocp version
@@ -88,11 +88,11 @@ $ ocp list
 Total disk: 3.4G
 ```
 
-`ocp list-versions` lists the versions on the mirror. You can filter by a
+`ocp list available` lists the versions on the mirror. You can filter by a
 minor version (`4.14`) or a channel (`stable-4.20`). A channel is reduced to
-its minor version line. `list-remote` is a hidden alias for `list-versions`.
+its minor version line.
 
-`ocp list-channels <X.Y>` lists the release channels for a minor version
+`ocp list channels <X.Y>` lists the release channels for a minor version
 (`candidate-`, `fast-`, `latest-`, `stable-`). It shows the version that each
 channel points to. Use this to see what a channel resolves to before you
 install.
@@ -101,7 +101,7 @@ Both commands mark versions that you have installed locally with
 `(installed: ...)` and the components that are present:
 
 ```
-$ ocp list-channels 4.20
+$ ocp list channels 4.20
 candidate-4.20   4.20.25
 fast-4.20        4.20.24  (installed: installer, oc, kubectl)
 latest-4.20      4.20.24  (installed: installer, oc, kubectl)
@@ -116,8 +116,8 @@ ocp get 5.0                        # falls back to fast/candidate if no stable-5
 ocp get 4.14.1                     # CLI only (oc + kubectl)
 ocp get --with-installer 4.14.1    # CLI + installer
 ocp get stable-4.15                # channel — resolves to the concrete version
-ocp list-versions 4.14             # all 4.14.z available on the mirror
-ocp list-channels 4.14             # 4.14 channels and the version each points to
+ocp list available 4.14            # all 4.14.z available on the mirror
+ocp list channels 4.14             # 4.14 channels and the version each points to
 ocp use 4.14.1                     # oc/kubectl now point at 4.14.1
 ocp list
 ```
