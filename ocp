@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.9.1"
+VERSION="0.9.2"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -53,6 +53,17 @@ ALL_COMPONENTS=("${CORE_COMPONENTS[@]}" "${OPTIONAL_COMPONENTS[@]}")
 err()  { printf 'error: %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 info() { printf '%s\n' "$*" >&2; }
+
+# True if $1 looks like an OCP version (4.18.1, 5.0.0-ec.3). BIN_DIR is often
+# shared with oc/kubectl plugins (kubectl-neat, oc-foo), whose suffixes must
+# never be mistaken for versions -- 'remove' would delete them.
+is_version() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+([.-].*)?$ ]]
+}
+
+require_version() {
+  is_version "$1" || die "'$1' is not a version (expected e.g. 4.18.1)"
+}
 
 require() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
@@ -523,6 +534,7 @@ version_disk() {
 cmd_use() {
   local version="${1:-}"
   [ -n "$version" ] || die "usage: ocp use <version>"
+  require_version "$version"
 
   # Tolerate partial installs: require at least one component, not all three.
   local bare any=0
@@ -566,6 +578,7 @@ cmd_list() {
       [ -L "$f" ] && continue   # skip the bare symlink if it matched
       # 'oc-*' also matches 'oc-mirror-*'; oc-mirror is gathered on its own pass.
       [ "$comp" = oc ] && case "${f##*/}" in oc-mirror-*) continue ;; esac
+      is_version "${f##*/$comp-}" || continue   # plugins: kubectl-neat, oc-foo
       versions+=("${f##*/$comp-}")
       files+=("$f")
     done
@@ -710,6 +723,7 @@ cmd_list_group() {
 cmd_remove() {
   local version="${1:-}"
   [ -n "$version" ] || die "usage: ocp remove <version>"
+  require_version "$version"
   local active removed=0
   active="$(active_version)"
 
