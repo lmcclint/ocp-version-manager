@@ -4,6 +4,10 @@ All notable changes to `ocp`. Newest first. Each `## X.Y.Z` section matches a
 `VERSION` released to `main`; `ocp update` prints the sections between a user's
 current version and the version they update to.
 
+## 0.9.3
+- a bare `oc`/`kubectl` symlink that ocp didn't create (e.g. pointing at a wrapper script) is no longer misread as the active version
+- internal cleanup: mirror-listing parsing, checksum-mismatch handling and channel resolution each live in one place; no other behavior change
+
 ## 0.9.2
 - oc/kubectl plugins sharing the install dir (e.g. `kubectl-neat`, `oc-foo`) are no longer mistaken for versions: `ocp list` ignores them, and `ocp use` / `ocp remove` reject non-version arguments -- previously `ocp remove neat` deleted `kubectl-neat`
 
