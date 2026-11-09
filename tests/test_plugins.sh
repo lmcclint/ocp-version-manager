@@ -31,4 +31,18 @@ err="$("$OCP" use neat 2>&1)"; rc=$?
 assert_eq 1 "$rc" "use of a plugin name fails"
 [ -e "$OCP_BIN_DIR/kubectl" ] && bad "kubectl linked to a plugin" || ok "kubectl not linked"
 
+echo "=== a foreign bare symlink is not an active version ==="
+# 'get' of an installed version takes the early-return path, which only needs
+# release.txt from the mirror and then prints the activation hint.
+if curl -fsSL "file://$OCP" -o /dev/null 2>/dev/null; then
+  mkdir -p "$TESTDIR/mirror/4.18.1"
+  printf 'Name: 4.18.1\n' > "$TESTDIR/mirror/4.18.1/release.txt"
+  ln -s /opt/tools/oc-wrapper "$OCP_BIN_DIR/oc"
+  out="$(OCP_BASE_URL="file://$TESTDIR/mirror" OCP_PLATFORM=linux "$OCP" get 4.18.1 2>&1)"
+  assert_no_re 'wrapper' "$out" "foreign symlink target not reported as a version"
+  assert_re "Run 'ocp use 4\.18\.1' to activate it" "$out" "treated as nothing active"
+else
+  echo "SKIP: this curl lacks file:// support" >&2
+fi
+
 finish
