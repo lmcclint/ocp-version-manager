@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.9.2"
+VERSION="0.9.3"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -224,18 +224,39 @@ resolve_version() {
   printf '%s\n' "$name"
 }
 
-# Verify a file against a line in sha256sum.txt. Args: <sumfile> <tarball-name> <file>
-# A missing checksum line is fatal (wrong filename). A hash mismatch returns 1
-# so the caller can decide (the mirror's Apple-Silicon checksums are unreliable).
+# Verify a file against a line in sha256sum.txt.
+# Args: <sumfile> <tarball-name> <file> <platform>
+# A missing checksum line is fatal (wrong filename). A hash mismatch is fatal
+# unless OCP_INSECURE=1, or the platform is mac-arm64, whose mirror checksums
+# are unreliable (see below).
 verify_checksum() {
-  local sumfile="$1" tarball="$2" file="$3" expected actual
+  local sumfile="$1" tarball="$2" file="$3" platform="$4" expected actual
   expected="$(grep -E "[[:space:]]${tarball}\$" "$sumfile" | awk '{print $1}' | head -n1)"
   [ -n "$expected" ] || die "no checksum for $tarball in sha256sum.txt"
   actual="$(sha256_of "$file")"
-  if [ "$expected" != "$actual" ]; then
-    info "checksum mismatch for $tarball (expected $expected, got $actual)"
-    return 1
+  [ "$expected" != "$actual" ] || return 0
+
+  info "checksum mismatch for $tarball (expected $expected, got $actual)"
+  if [ "$platform" = "mac-arm64" ]; then
+    info "  note: Apple Silicon binaries are re-signed/notarized after the mirror"
+    info "  publishes sha256sum.txt, so this mismatch is expected upstream; continuing."
+  elif [ "${OCP_INSECURE:-}" = "1" ]; then
+    info "  OCP_INSECURE=1 set; continuing despite mismatch."
+  else
+    die "checksum verification failed for $tarball (set OCP_INSECURE=1 to override)"
   fi
+}
+
+# Echo the directory names linked from a mirror index page, one per line,
+# without the trailing slash. Arg: <html>
+mirror_dirs() {
+  printf '%s\n' "$1" | grep -oE 'href="[^"]+/"' | sed -E 's/href="([^"]+)\/"/\1/'
+}
+
+# Reduce a channel name to its version part (stable-4.20 -> 4.20); anything
+# else passes through unchanged.
+strip_channel() {
+  printf '%s\n' "$1" | sed -E 's/^[A-Za-z]+-//'
 }
 
 # Download + verify + install oc-mirror for a version. oc-mirror's tarball is
@@ -281,13 +302,7 @@ fetch_oc_mirror() {
     || die "failed to download $tarball"
 
   info "Verifying checksum ..."
-  if ! verify_checksum "$sumfile" "$tarball" "$WORKDIR/$tarball"; then
-    if [ "${OCP_INSECURE:-}" = "1" ]; then
-      info "  OCP_INSECURE=1 set; continuing despite mismatch."
-    else
-      die "checksum verification failed for $tarball (set OCP_INSECURE=1 to override)"
-    fi
-  fi
+  verify_checksum "$sumfile" "$tarball" "$WORKDIR/$tarball" "$platform"
 
   tar -xzf "$WORKDIR/$tarball" -C "$WORKDIR" oc-mirror
   install -m 0755 "$WORKDIR/oc-mirror" "$BIN_DIR/oc-mirror-$version"
@@ -431,16 +446,7 @@ cmd_get() {
 
     info "Verifying checksums ..."
     for t in "${tarballs[@]}"; do
-      if ! verify_checksum "$tmp/sha256sum.txt" "$t" "$tmp/$t"; then
-        if [ "$platform" = "mac-arm64" ]; then
-          info "  note: Apple Silicon binaries are re-signed/notarized after the mirror"
-          info "  publishes sha256sum.txt, so this mismatch is expected upstream; continuing."
-        elif [ "${OCP_INSECURE:-}" = "1" ]; then
-          info "  OCP_INSECURE=1 set; continuing despite mismatch."
-        else
-          die "checksum verification failed for $t (set OCP_INSECURE=1 to override)"
-        fi
-      fi
+      verify_checksum "$tmp/sha256sum.txt" "$t" "$tmp/$t" "$platform"
     done
 
     info "Extracting ..."
@@ -496,12 +502,14 @@ activation_hint() {
 # Echo the active version, read from the first bare symlink that exists.
 # Falls back oc/kubectl so a cli-only active version is still detected.
 active_version() {
-  local bare link target
+  local bare link target v
   for bare in "${ALL_COMPONENTS[@]}"; do
     link="$BIN_DIR/$bare"
     [ -L "$link" ] || continue
     target="$(readlink "$link")"
-    printf '%s\n' "${target##*$bare-}"
+    v="${target##*$bare-}"
+    is_version "$v" || continue   # a symlink ocp didn't make (e.g. to a wrapper)
+    printf '%s\n' "$v"
     return 0
   done
 }
@@ -509,11 +517,11 @@ active_version() {
 # Echo the components installed for a version as a comma-joined list
 # (e.g. "installer, oc, kubectl"), or nothing if none are installed.
 installed_components() {
-  local version="$1" present=""
-  [ -x "$BIN_DIR/openshift-install-$version" ] && present="${present:+$present, }installer"
-  [ -x "$BIN_DIR/oc-$version" ]                && present="${present:+$present, }oc"
-  [ -x "$BIN_DIR/kubectl-$version" ]           && present="${present:+$present, }kubectl"
-  [ -x "$BIN_DIR/oc-mirror-$version" ]         && present="${present:+$present, }oc-mirror"
+  local version="$1" present="" comp
+  for comp in "${ALL_COMPONENTS[@]}"; do
+    [ -x "$BIN_DIR/$comp-$version" ] \
+      && present="${present:+$present, }${comp/#openshift-install/installer}"
+  done
   printf '%s' "$present"
 }
 
@@ -612,7 +620,7 @@ cmd_list_versions() {
     # Reduce a channel-style filter (stable-4.20, fast-4.16, ...) to its
     # version part so 'list available stable-4.20' lists the 4.20 line, the same
     # way channels are accepted by 'get'/'use'.
-    filter="$(printf '%s\n' "$filter" | sed -E 's/^[A-Za-z]+-//')"
+    filter="$(strip_channel "$filter")"
     # Anchor at a version-segment boundary (next char is '.' or end of line)
     # so '4.2' doesn't match '4.20', while a full version or channel still does.
     pat="^${filter//./\\.}(\\.|\$)"
@@ -620,10 +628,7 @@ cmd_list_versions() {
 
   local listing
   listing="$(curl -fsSL "$url")" || die "failed to list $url"
-  listing="$(printf '%s\n' "$listing" \
-    | grep -oE 'href="[^"]+/"' \
-    | sed -E 's/href="([^"]+)\/"/\1/' \
-    | grep -vE '^\.')" || true
+  listing="$(mirror_dirs "$listing" | grep -vE '^\.')" || true
 
   local results
   if [ -n "$pat" ]; then
@@ -656,15 +661,14 @@ cmd_list_channels() {
   local filter="${1:-}"
   [ -n "$filter" ] || die "usage: ocp list channels <X.Y>  (e.g. ocp list channels 4.20)"
   # Accept 'stable-4.20' too by reducing it to its X.Y part.
-  filter="$(printf '%s\n' "$filter" | sed -E 's/^[A-Za-z]+-//')"
+  filter="$(strip_channel "$filter")"
 
-  local listing channels
+  local listing dirs channels
   listing="$(curl -fsSL "$BASE_URL/")" || die "failed to list $BASE_URL/"
+  dirs="$(mirror_dirs "$listing")" || true
   # Channel dirs start with a letter; keep those ending at the requested X.Y
   # (preceded by '-' or line start) so '4.2' doesn't match '4.20'.
-  channels="$(printf '%s\n' "$listing" \
-    | grep -oE 'href="[^"]+/"' \
-    | sed -E 's/href="([^"]+)\/"/\1/' \
+  channels="$(printf '%s\n' "$dirs" \
     | grep -E '^[A-Za-z]' \
     | grep -E "(^|-)${filter//./\\.}\$" \
     | vsort | uniq)" || true
@@ -675,9 +679,7 @@ cmd_list_channels() {
     # leaving a dead end -- the listing is already in hand, so this is free.
     local newest=""
     if printf '%s\n' "$filter" | grep -qE '^[0-9]+$'; then
-      newest="$(printf '%s\n' "$listing" \
-        | grep -oE 'href="[^"]+/"' \
-        | sed -E 's/href="([^"]+)\/"/\1/' \
+      newest="$(printf '%s\n' "$dirs" \
         | sed -nE "s/^[A-Za-z]+-(${filter}\.[0-9]+)\$/\1/p" \
         | vsort | uniq | tail -n1)" || true
     fi
@@ -692,8 +694,7 @@ cmd_list_channels() {
 
   local ch ver comps
   while IFS= read -r ch; do
-    ver="$(curl -fsSL "$BASE_URL/$ch/release.txt" 2>/dev/null \
-      | sed -n 's/^Name:[[:space:]]*//p' | head -n1)" || true
+    ver="$(try_resolve_version "$ch")" || true
     comps=""
     [ -n "$ver" ] && comps="$(installed_components "$ver")"
     if [ -n "$comps" ]; then
