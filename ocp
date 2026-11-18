@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.9.1"
+VERSION="0.9.4"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -28,6 +28,10 @@ VERSION="0.9.1"
 # arches aren't fully supported. Override OCP_BASE_URL to point at another tree.
 BASE_URL="${OCP_BASE_URL:-https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp}"
 BIN_DIR="${OCP_BIN_DIR:-$HOME/.local/bin}"
+
+# OpenShift update graph (Cincinnati). 'list available X.Y' reads channel
+# membership from here -- the mirror only knows each channel's current head.
+GRAPH_URL="${OCP_GRAPH_URL:-https://api.openshift.com/api/upgrades_info/v1/graph}"
 
 # Where 'ocp update' pulls a fresh copy of this script from. Override for forks.
 UPDATE_URL="${OCP_UPDATE_URL:-https://raw.githubusercontent.com/lmcclint/ocp-version-manager/main/ocp}"
@@ -53,6 +57,17 @@ ALL_COMPONENTS=("${CORE_COMPONENTS[@]}" "${OPTIONAL_COMPONENTS[@]}")
 err()  { printf 'error: %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 info() { printf '%s\n' "$*" >&2; }
+
+# True if $1 looks like an OCP version (4.18.1, 5.0.0-ec.3). BIN_DIR is often
+# shared with oc/kubectl plugins (kubectl-neat, oc-foo), whose suffixes must
+# never be mistaken for versions -- 'remove' would delete them.
+is_version() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+([.-].*)?$ ]]
+}
+
+require_version() {
+  is_version "$1" || die "'$1' is not a version (expected e.g. 4.18.1)"
+}
 
 require() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
@@ -159,7 +174,8 @@ Usage:
                               --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
   ocp list [installed]        List installed versions with disk usage (* = active)
-  ocp list available [X.Y]    List versions available on the mirror
+  ocp list available [X.Y]    List versions available on the mirror; with X.Y,
+                              tag each with its channels [candidate, fast, ...]
   ocp list channels <X.Y>     List a minor's channels and the version each points to
   ocp remove <version>        Remove an installed version
   ocp update                  Update ocp itself to the latest version
@@ -188,6 +204,8 @@ Environment:
   OCP_WITH_MIRROR set to 1 to always include oc-mirror in a default 'get'
   OCP_BASE_URL   mirror clients dir (default: the cross-platform x86_64 tree,
                  which also serves the arm64 + mac binaries)
+  OCP_GRAPH_URL  update graph API for 'list available' channel tags
+                 (default: api.openshift.com upgrades_info graph)
   OCP_UPDATE_URL source URL for 'ocp update' (default: GitHub raw, main)
   OCP_CHANGELOG_URL source URL for release notes (default: derived from OCP_UPDATE_URL)
 EOF
@@ -213,18 +231,64 @@ resolve_version() {
   printf '%s\n' "$name"
 }
 
-# Verify a file against a line in sha256sum.txt. Args: <sumfile> <tarball-name> <file>
-# A missing checksum line is fatal (wrong filename). A hash mismatch returns 1
-# so the caller can decide (the mirror's Apple-Silicon checksums are unreliable).
+# Verify a file against a line in sha256sum.txt.
+# Args: <sumfile> <tarball-name> <file> <platform>
+# A missing checksum line is fatal (wrong filename). A hash mismatch is fatal
+# unless OCP_INSECURE=1, or the platform is mac-arm64, whose mirror checksums
+# are unreliable (see below).
 verify_checksum() {
-  local sumfile="$1" tarball="$2" file="$3" expected actual
+  local sumfile="$1" tarball="$2" file="$3" platform="$4" expected actual
   expected="$(grep -E "[[:space:]]${tarball}\$" "$sumfile" | awk '{print $1}' | head -n1)"
   [ -n "$expected" ] || die "no checksum for $tarball in sha256sum.txt"
   actual="$(sha256_of "$file")"
-  if [ "$expected" != "$actual" ]; then
-    info "checksum mismatch for $tarball (expected $expected, got $actual)"
-    return 1
+  [ "$expected" != "$actual" ] || return 0
+
+  info "checksum mismatch for $tarball (expected $expected, got $actual)"
+  if [ "$platform" = "mac-arm64" ]; then
+    info "  note: Apple Silicon binaries are re-signed/notarized after the mirror"
+    info "  publishes sha256sum.txt, so this mismatch is expected upstream; continuing."
+  elif [ "${OCP_INSECURE:-}" = "1" ]; then
+    info "  OCP_INSECURE=1 set; continuing despite mismatch."
+  else
+    die "checksum verification failed for $tarball (set OCP_INSECURE=1 to override)"
   fi
+}
+
+# Echo the directory names linked from a mirror index page, one per line,
+# without the trailing slash. Arg: <html>
+mirror_dirs() {
+  printf '%s\n' "$1" | grep -oE 'href="[^"]+/"' | sed -E 's/href="([^"]+)\/"/\1/'
+}
+
+# Reduce a channel name to its version part (stable-4.20 -> 4.20); anything
+# else passes through unchanged.
+strip_channel() {
+  printf '%s\n' "$1" | sed -E 's/^[A-Za-z]+-//'
+}
+
+# Echo '<version><TAB><channels>' for every release in a minor's update graph,
+# keeping only that minor's channels with the suffix dropped
+# ("4.20.1<TAB>candidate, eus, fast, stable"). candidate-X.Y is the superset
+# channel and each node lists all of its channels in metadata, so one request
+# covers fast/stable/eus too. Scraped with grep/awk to avoid a jq dependency.
+# Arg: <X.Y>. Notes on stderr and echoes nothing if the graph is unreachable.
+graph_channels() {
+  local minor="$1" json
+  json="$(curl -fsSL "$GRAPH_URL?channel=candidate-$minor" 2>/dev/null)" \
+    || { info "channel info unavailable (could not reach $GRAPH_URL)"; return 0; }
+  printf '%s\n' "$json" \
+    | grep -oE '"version":"[^"]+"|"io\.openshift\.upgrades\.graph\.release\.channels":"[^"]*"' \
+    | awk -F'"' -v sfx="-$minor" '
+        /^"version"/ { v = $4; next }
+        {
+          n = split($4, ch, ","); out = ""
+          for (i = 1; i <= n; i++) {
+            base = length(ch[i]) - length(sfx)
+            if (base > 0 && substr(ch[i], base + 1) == sfx)
+              out = out (out == "" ? "" : ", ") substr(ch[i], 1, base)
+          }
+          if (out != "") print v "\t" out
+        }' || true
 }
 
 # Download + verify + install oc-mirror for a version. oc-mirror's tarball is
@@ -270,13 +334,7 @@ fetch_oc_mirror() {
     || die "failed to download $tarball"
 
   info "Verifying checksum ..."
-  if ! verify_checksum "$sumfile" "$tarball" "$WORKDIR/$tarball"; then
-    if [ "${OCP_INSECURE:-}" = "1" ]; then
-      info "  OCP_INSECURE=1 set; continuing despite mismatch."
-    else
-      die "checksum verification failed for $tarball (set OCP_INSECURE=1 to override)"
-    fi
-  fi
+  verify_checksum "$sumfile" "$tarball" "$WORKDIR/$tarball" "$platform"
 
   tar -xzf "$WORKDIR/$tarball" -C "$WORKDIR" oc-mirror
   install -m 0755 "$WORKDIR/oc-mirror" "$BIN_DIR/oc-mirror-$version"
@@ -420,16 +478,7 @@ cmd_get() {
 
     info "Verifying checksums ..."
     for t in "${tarballs[@]}"; do
-      if ! verify_checksum "$tmp/sha256sum.txt" "$t" "$tmp/$t"; then
-        if [ "$platform" = "mac-arm64" ]; then
-          info "  note: Apple Silicon binaries are re-signed/notarized after the mirror"
-          info "  publishes sha256sum.txt, so this mismatch is expected upstream; continuing."
-        elif [ "${OCP_INSECURE:-}" = "1" ]; then
-          info "  OCP_INSECURE=1 set; continuing despite mismatch."
-        else
-          die "checksum verification failed for $t (set OCP_INSECURE=1 to override)"
-        fi
-      fi
+      verify_checksum "$tmp/sha256sum.txt" "$t" "$tmp/$t" "$platform"
     done
 
     info "Extracting ..."
@@ -485,12 +534,14 @@ activation_hint() {
 # Echo the active version, read from the first bare symlink that exists.
 # Falls back oc/kubectl so a cli-only active version is still detected.
 active_version() {
-  local bare link target
+  local bare link target v
   for bare in "${ALL_COMPONENTS[@]}"; do
     link="$BIN_DIR/$bare"
     [ -L "$link" ] || continue
     target="$(readlink "$link")"
-    printf '%s\n' "${target##*$bare-}"
+    v="${target##*$bare-}"
+    is_version "$v" || continue   # a symlink ocp didn't make (e.g. to a wrapper)
+    printf '%s\n' "$v"
     return 0
   done
 }
@@ -498,11 +549,11 @@ active_version() {
 # Echo the components installed for a version as a comma-joined list
 # (e.g. "installer, oc, kubectl"), or nothing if none are installed.
 installed_components() {
-  local version="$1" present=""
-  [ -x "$BIN_DIR/openshift-install-$version" ] && present="${present:+$present, }installer"
-  [ -x "$BIN_DIR/oc-$version" ]                && present="${present:+$present, }oc"
-  [ -x "$BIN_DIR/kubectl-$version" ]           && present="${present:+$present, }kubectl"
-  [ -x "$BIN_DIR/oc-mirror-$version" ]         && present="${present:+$present, }oc-mirror"
+  local version="$1" present="" comp
+  for comp in "${ALL_COMPONENTS[@]}"; do
+    [ -x "$BIN_DIR/$comp-$version" ] \
+      && present="${present:+$present, }${comp/#openshift-install/installer}"
+  done
   printf '%s' "$present"
 }
 
@@ -523,6 +574,7 @@ version_disk() {
 cmd_use() {
   local version="${1:-}"
   [ -n "$version" ] || die "usage: ocp use <version>"
+  require_version "$version"
 
   # Tolerate partial installs: require at least one component, not all three.
   local bare any=0
@@ -566,6 +618,7 @@ cmd_list() {
       [ -L "$f" ] && continue   # skip the bare symlink if it matched
       # 'oc-*' also matches 'oc-mirror-*'; oc-mirror is gathered on its own pass.
       [ "$comp" = oc ] && case "${f##*/}" in oc-mirror-*) continue ;; esac
+      is_version "${f##*/$comp-}" || continue   # plugins: kubectl-neat, oc-foo
       versions+=("${f##*/$comp-}")
       files+=("$f")
     done
@@ -599,7 +652,7 @@ cmd_list_versions() {
     # Reduce a channel-style filter (stable-4.20, fast-4.16, ...) to its
     # version part so 'list available stable-4.20' lists the 4.20 line, the same
     # way channels are accepted by 'get'/'use'.
-    filter="$(printf '%s\n' "$filter" | sed -E 's/^[A-Za-z]+-//')"
+    filter="$(strip_channel "$filter")"
     # Anchor at a version-segment boundary (next char is '.' or end of line)
     # so '4.2' doesn't match '4.20', while a full version or channel still does.
     pat="^${filter//./\\.}(\\.|\$)"
@@ -607,10 +660,7 @@ cmd_list_versions() {
 
   local listing
   listing="$(curl -fsSL "$url")" || die "failed to list $url"
-  listing="$(printf '%s\n' "$listing" \
-    | grep -oE 'href="[^"]+/"' \
-    | sed -E 's/href="([^"]+)\/"/\1/' \
-    | grep -vE '^\.')" || true
+  listing="$(mirror_dirs "$listing" | grep -vE '^\.')" || true
 
   local results
   if [ -n "$pat" ]; then
@@ -624,15 +674,23 @@ cmd_list_versions() {
     return 0
   fi
 
-  # Annotate any version already installed locally with its components.
-  local version comps
+  # Tag versions with their channels when the filter names a minor (X.Y or
+  # X.Y.Z). Unfiltered or bare-major runs span many minors -- one graph
+  # request each -- so they stay untagged.
+  local minor tags=""
+  minor="$(printf '%s\n' "$filter" | grep -oE '^[0-9]+\.[0-9]+')" || true
+  [ -n "$minor" ] && tags="$(graph_channels "$minor")"
+
+  # Annotate each version with its channels and any locally installed components.
+  local version comps tag line
   printf '%s\n' "$results" | while IFS= read -r version; do
+    line="$version"
+    tag=""
+    [ -n "$tags" ] && tag="$(printf '%s\n' "$tags" | awk -F'\t' -v v="$version" '$1 == v { print $2; exit }')"
+    [ -n "$tag" ] && line="$line  [$tag]"
     comps="$(installed_components "$version")"
-    if [ -n "$comps" ]; then
-      printf '%s  (installed: %s)\n' "$version" "$comps"
-    else
-      printf '%s\n' "$version"
-    fi
+    [ -n "$comps" ] && line="$line  (installed: $comps)"
+    printf '%s\n' "$line"
   done
 }
 
@@ -643,15 +701,14 @@ cmd_list_channels() {
   local filter="${1:-}"
   [ -n "$filter" ] || die "usage: ocp list channels <X.Y>  (e.g. ocp list channels 4.20)"
   # Accept 'stable-4.20' too by reducing it to its X.Y part.
-  filter="$(printf '%s\n' "$filter" | sed -E 's/^[A-Za-z]+-//')"
+  filter="$(strip_channel "$filter")"
 
-  local listing channels
+  local listing dirs channels
   listing="$(curl -fsSL "$BASE_URL/")" || die "failed to list $BASE_URL/"
+  dirs="$(mirror_dirs "$listing")" || true
   # Channel dirs start with a letter; keep those ending at the requested X.Y
   # (preceded by '-' or line start) so '4.2' doesn't match '4.20'.
-  channels="$(printf '%s\n' "$listing" \
-    | grep -oE 'href="[^"]+/"' \
-    | sed -E 's/href="([^"]+)\/"/\1/' \
+  channels="$(printf '%s\n' "$dirs" \
     | grep -E '^[A-Za-z]' \
     | grep -E "(^|-)${filter//./\\.}\$" \
     | vsort | uniq)" || true
@@ -662,9 +719,7 @@ cmd_list_channels() {
     # leaving a dead end -- the listing is already in hand, so this is free.
     local newest=""
     if printf '%s\n' "$filter" | grep -qE '^[0-9]+$'; then
-      newest="$(printf '%s\n' "$listing" \
-        | grep -oE 'href="[^"]+/"' \
-        | sed -E 's/href="([^"]+)\/"/\1/' \
+      newest="$(printf '%s\n' "$dirs" \
         | sed -nE "s/^[A-Za-z]+-(${filter}\.[0-9]+)\$/\1/p" \
         | vsort | uniq | tail -n1)" || true
     fi
@@ -679,8 +734,7 @@ cmd_list_channels() {
 
   local ch ver comps
   while IFS= read -r ch; do
-    ver="$(curl -fsSL "$BASE_URL/$ch/release.txt" 2>/dev/null \
-      | sed -n 's/^Name:[[:space:]]*//p' | head -n1)" || true
+    ver="$(try_resolve_version "$ch")" || true
     comps=""
     [ -n "$ver" ] && comps="$(installed_components "$ver")"
     if [ -n "$comps" ]; then
@@ -710,6 +764,7 @@ cmd_list_group() {
 cmd_remove() {
   local version="${1:-}"
   [ -n "$version" ] || die "usage: ocp remove <version>"
+  require_version "$version"
   local active removed=0
   active="$(active_version)"
 

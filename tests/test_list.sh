@@ -11,6 +11,18 @@ case "$url" in
   */latest-4.20/release.txt)    echo "Name: 4.20.25" ;;
   */stable-4.20/release.txt)    echo "Name: 4.20.24" ;;
   */release.txt)                exit 22 ;;   # unknown channel -> like a 404
+  *unreachable-graph*)          exit 7 ;;    # graph API down
+  *graph\?channel=candidate-4.20)
+    # Trimmed Cincinnati graph: each node lists every channel it is in,
+    # including other minors' (upgrade sources) that must not leak through.
+    printf '%s' '{"version":1,"nodes":['
+    printf '%s' '{"version":"4.20.0","payload":"x","metadata":{"io.openshift.upgrades.graph.release.channels":"candidate-4.20,fast-4.20,stable-4.20,candidate-4.21"}},'
+    printf '%s' '{"version":"4.20.1","payload":"x","metadata":{"io.openshift.upgrades.graph.release.channels":"candidate-4.20,eus-4.20,fast-4.20,stable-4.20"}},'
+    printf '%s' '{"version":"4.20.10","payload":"x","metadata":{"io.openshift.upgrades.graph.release.channels":"candidate-4.20"}},'
+    printf '%s' '{"version":"4.19.5","payload":"x","metadata":{"io.openshift.upgrades.graph.release.channels":"candidate-4.19,candidate-4.20"}}'
+    printf '%s\n' '],"edges":[]}'
+    ;;
+  *graph\?channel=*)            echo '{"version":1,"nodes":[],"edges":[]}' ;;
   *)
     cat <<'HTML'
 <a href="../">../</a>
@@ -42,8 +54,8 @@ mkdir -p "$OCP_BIN_DIR"
 
 echo "=== list available: channel filter reduces to its X.Y line ==="
 out="$("$OCP" list available stable-4.20 2>/dev/null)"
-assert_re '^4\.20\.0$'  "$out" "lists 4.20.0"
-assert_re '^4\.20\.10$' "$out" "lists 4.20.10"
+assert_re '^4\.20\.0( |$)'  "$out" "lists 4.20.0"
+assert_re '^4\.20\.10( |$)' "$out" "lists 4.20.10"
 assert_no_re '^4\.2\.0$' "$out" "excludes 4.2.0"
 
 echo "=== list available: X.Y boundary ==="
@@ -53,13 +65,35 @@ assert_no_re '^4\.20\.' "$out" "4.2 excludes 4.20.x"
 
 echo "=== list available: exact version boundary ==="
 out="$("$OCP" list available 4.20.1 2>/dev/null)"
-assert_re '^4\.20\.1$' "$out" "includes 4.20.1"
-assert_no_re '^4\.20\.10$' "$out" "excludes 4.20.10"
+assert_re '^4\.20\.1( |$)' "$out" "includes 4.20.1"
+assert_no_re '^4\.20\.10( |$)' "$out" "excludes 4.20.10"
+
+echo "=== list available: channel membership from the update graph ==="
+out="$("$OCP" list available 4.20 2>/dev/null)"
+assert_re '^4\.20\.0  \[candidate, fast, stable\]$' "$out" "tags 4.20.0 with its 4.20 channels"
+assert_re '^4\.20\.10  \[candidate\]$' "$out" "tags candidate-only version"
+assert_re '^4\.20\.0-rc\.0$' "$out" "version absent from the graph stays plain"
+assert_no_re '4\.21' "$out" "other minors' channels don't leak into tags"
+out="$("$OCP" list available 4.20.1 2>/dev/null)"
+assert_re '^4\.20\.1  \[candidate, eus, fast, stable\]$' "$out" "exact-version filter is tagged too"
+
+echo "=== list available: no channel lookup without a minor ==="
+out="$("$OCP" list available 2>/dev/null)"
+assert_no_re '\[' "$out" "unfiltered list has no channel tags"
+out="$("$OCP" list available 4 2>/dev/null)"
+assert_no_re '\[' "$out" "bare-major filter has no channel tags"
+
+echo "=== list available: unreachable graph degrades gracefully ==="
+out="$(OCP_GRAPH_URL=http://unreachable-graph "$OCP" list available 4.20 2>/dev/null)"; rc=$?
+assert_eq 0 "$rc" "exit 0 when graph is unreachable"
+assert_re '^4\.20\.0$' "$out" "versions still listed, untagged"
+err="$(OCP_GRAPH_URL=http://unreachable-graph "$OCP" list available 4.20 2>&1 >/dev/null)"
+assert_re 'channel info unavailable' "$err" "notes the missing channel info"
 
 echo "=== legacy flat-name aliases still work ==="
 for alias in list-versions list-remote; do
   out="$("$OCP" "$alias" 4.20 2>/dev/null)"
-  assert_re '^4\.20\.1$' "$out" "$alias lists 4.20.1"
+  assert_re '^4\.20\.1( |$)' "$out" "$alias lists 4.20.1"
 done
 out="$("$OCP" list-channels 4.20 2>/dev/null)"
 assert_re '^stable-4\.20[[:space:]]+4\.20\.24$' "$out" "list-channels resolves stable-4.20"
@@ -115,8 +149,8 @@ stub "$OCP_BIN_DIR/oc-4.20.1"; stub "$OCP_BIN_DIR/kubectl-4.20.1"          # cli
 for b in openshift-install oc kubectl; do stub "$OCP_BIN_DIR/$b-4.20.24"; done  # full (stable-4.20 target)
 
 out="$("$OCP" list available 4.20 2>/dev/null)"
-assert_re '^4\.20\.1  \(installed: oc, kubectl\)$' "$out" "list available annotates partial install"
-assert_re '^4\.20\.0$' "$out" "list available leaves uninstalled versions plain"
+assert_re '^4\.20\.1  \[candidate, eus, fast, stable\]  \(installed: oc, kubectl\)$' "$out" "list available annotates partial install"
+assert_no_re '^4\.20\.0 .*installed' "$out" "list available leaves uninstalled versions unannotated"
 
 out="$("$OCP" list channels 4.20 2>/dev/null)"
 assert_re '^stable-4\.20[[:space:]]+4\.20\.24[[:space:]]+\(installed: installer, oc, kubectl\)$' "$out" "list channels annotates installed channel target"

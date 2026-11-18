@@ -92,6 +92,20 @@ Total disk: 3.4G
 minor version (`4.14`) or a channel (`stable-4.20`). A channel is reduced to
 its minor version line.
 
+When the filter names a minor version, each version is also tagged with the
+channels it belongs to. This data comes from the OpenShift update graph
+(`api.openshift.com`), not the mirror, so it shows full membership and not only
+the channel heads. If the graph is unreachable, the list still prints without
+tags:
+
+```
+$ ocp list available 4.20
+4.20.0  [candidate, eus, fast, stable]
+4.20.0-rc.0  [candidate]
+...
+4.20.1  [candidate, eus, fast, stable]  (installed: oc, kubectl)
+```
+
 `ocp list channels <X.Y>` lists the release channels for a minor version
 (`candidate-`, `fast-`, `latest-`, `stable-`). It shows the version that each
 channel points to. Use this to see what a channel resolves to before you
@@ -195,6 +209,7 @@ those architectures unless you set `OCP_PLATFORM` and `OCP_BASE_URL` yourself.
 | `OCP_WITH_INSTALLER` | Set to `1` to always include the installer with `get` |
 | `OCP_WITH_MIRROR` | Set to `1` to always include oc-mirror with `get` |
 | `OCP_BASE_URL` | Mirror clients directory (default: the cross-platform `x86_64` tree) |
+| `OCP_GRAPH_URL` | Update graph API for `list available` channel tags (default: `api.openshift.com` upgrades graph) |
 | `OCP_UPDATE_URL` | Source URL for `ocp update` (default: GitHub raw, `main`) |
 | `OCP_CHANGELOG_URL` | Source URL for release notes from `ocp update` (default: `CHANGELOG.md` alongside `OCP_UPDATE_URL`) |
 
