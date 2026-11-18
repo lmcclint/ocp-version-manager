@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ---- configuration ---------------------------------------------------------
 
-VERSION="0.9.3"
+VERSION="0.9.4"
 
 # Despite the "x86_64" in the path, this is the mirror's cross-platform client
 # directory: each version dir holds the linux, linux-arm64, mac and mac-arm64
@@ -28,6 +28,10 @@ VERSION="0.9.3"
 # arches aren't fully supported. Override OCP_BASE_URL to point at another tree.
 BASE_URL="${OCP_BASE_URL:-https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp}"
 BIN_DIR="${OCP_BIN_DIR:-$HOME/.local/bin}"
+
+# OpenShift update graph (Cincinnati). 'list available X.Y' reads channel
+# membership from here -- the mirror only knows each channel's current head.
+GRAPH_URL="${OCP_GRAPH_URL:-https://api.openshift.com/api/upgrades_info/v1/graph}"
 
 # Where 'ocp update' pulls a fresh copy of this script from. Override for forks.
 UPDATE_URL="${OCP_UPDATE_URL:-https://raw.githubusercontent.com/lmcclint/ocp-version-manager/main/ocp}"
@@ -170,7 +174,8 @@ Usage:
                               --use            activate it afterwards
   ocp use <version>           Activate a version (swap symlinks)
   ocp list [installed]        List installed versions with disk usage (* = active)
-  ocp list available [X.Y]    List versions available on the mirror
+  ocp list available [X.Y]    List versions available on the mirror; with X.Y,
+                              tag each with its channels [candidate, fast, ...]
   ocp list channels <X.Y>     List a minor's channels and the version each points to
   ocp remove <version>        Remove an installed version
   ocp update                  Update ocp itself to the latest version
@@ -199,6 +204,8 @@ Environment:
   OCP_WITH_MIRROR set to 1 to always include oc-mirror in a default 'get'
   OCP_BASE_URL   mirror clients dir (default: the cross-platform x86_64 tree,
                  which also serves the arm64 + mac binaries)
+  OCP_GRAPH_URL  update graph API for 'list available' channel tags
+                 (default: api.openshift.com upgrades_info graph)
   OCP_UPDATE_URL source URL for 'ocp update' (default: GitHub raw, main)
   OCP_CHANGELOG_URL source URL for release notes (default: derived from OCP_UPDATE_URL)
 EOF
@@ -257,6 +264,31 @@ mirror_dirs() {
 # else passes through unchanged.
 strip_channel() {
   printf '%s\n' "$1" | sed -E 's/^[A-Za-z]+-//'
+}
+
+# Echo '<version><TAB><channels>' for every release in a minor's update graph,
+# keeping only that minor's channels with the suffix dropped
+# ("4.20.1<TAB>candidate, eus, fast, stable"). candidate-X.Y is the superset
+# channel and each node lists all of its channels in metadata, so one request
+# covers fast/stable/eus too. Scraped with grep/awk to avoid a jq dependency.
+# Arg: <X.Y>. Notes on stderr and echoes nothing if the graph is unreachable.
+graph_channels() {
+  local minor="$1" json
+  json="$(curl -fsSL "$GRAPH_URL?channel=candidate-$minor" 2>/dev/null)" \
+    || { info "channel info unavailable (could not reach $GRAPH_URL)"; return 0; }
+  printf '%s\n' "$json" \
+    | grep -oE '"version":"[^"]+"|"io\.openshift\.upgrades\.graph\.release\.channels":"[^"]*"' \
+    | awk -F'"' -v sfx="-$minor" '
+        /^"version"/ { v = $4; next }
+        {
+          n = split($4, ch, ","); out = ""
+          for (i = 1; i <= n; i++) {
+            base = length(ch[i]) - length(sfx)
+            if (base > 0 && substr(ch[i], base + 1) == sfx)
+              out = out (out == "" ? "" : ", ") substr(ch[i], 1, base)
+          }
+          if (out != "") print v "\t" out
+        }' || true
 }
 
 # Download + verify + install oc-mirror for a version. oc-mirror's tarball is
@@ -642,15 +674,23 @@ cmd_list_versions() {
     return 0
   fi
 
-  # Annotate any version already installed locally with its components.
-  local version comps
+  # Tag versions with their channels when the filter names a minor (X.Y or
+  # X.Y.Z). Unfiltered or bare-major runs span many minors -- one graph
+  # request each -- so they stay untagged.
+  local minor tags=""
+  minor="$(printf '%s\n' "$filter" | grep -oE '^[0-9]+\.[0-9]+')" || true
+  [ -n "$minor" ] && tags="$(graph_channels "$minor")"
+
+  # Annotate each version with its channels and any locally installed components.
+  local version comps tag line
   printf '%s\n' "$results" | while IFS= read -r version; do
+    line="$version"
+    tag=""
+    [ -n "$tags" ] && tag="$(printf '%s\n' "$tags" | awk -F'\t' -v v="$version" '$1 == v { print $2; exit }')"
+    [ -n "$tag" ] && line="$line  [$tag]"
     comps="$(installed_components "$version")"
-    if [ -n "$comps" ]; then
-      printf '%s  (installed: %s)\n' "$version" "$comps"
-    else
-      printf '%s\n' "$version"
-    fi
+    [ -n "$comps" ] && line="$line  (installed: $comps)"
+    printf '%s\n' "$line"
   done
 }
 
